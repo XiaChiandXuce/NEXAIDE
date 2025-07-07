@@ -1,4 +1,5 @@
-# nexaide README
+# NEXAIDE README
+![ChatGPT Image 2025年6月22日 10_12_03](https://github.com/user-attachments/assets/a3c2a06c-0c3f-4ce3-abd9-1e6eb8072798)
 
 This is the README for your extension "nexaide". After writing up a brief description, we recommend including the following sections.
 
