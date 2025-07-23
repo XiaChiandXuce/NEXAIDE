@@ -1,51 +1,208 @@
-# nexaide README
+# NEXAIDE Plugin - AI编程助手插件
 
-This is the README for your extension "nexaide". After writing up a brief description, we recommend including the following sections.
+**NEXAIDE Plugin** 是一个现代化的VSCode扩展，为开发者提供AI驱动的编程辅助功能。基于先进的大语言模型，NEXAIDE能够理解代码上下文，提供智能建议，并协助解决编程问题。插件采用现代化UI设计，提供流畅的用户体验。
 
-## Features
+![NEXAIDE Plugin](https://img.shields.io/badge/NEXAIDE-AI%20Assistant-blue?style=for-the-badge&logo=visualstudiocode)
+![Version](https://img.shields.io/badge/version-0.1.0-green?style=for-the-badge)
+![License](https://img.shields.io/badge/license-MIT-orange?style=for-the-badge)
 
-Describe specific features of your extension including screenshots of your extension in action. Image paths are relative to this README file.
+## ✨ 核心功能
 
-For example if there is an image subfolder under your extension project workspace:
+### 🤖 AI聊天助手
+- **现代化界面**: 美观的渐变色设计，流畅的动画效果
+- **智能对话**: 与AI助手进行自然语言对话，获取编程建议
+- **实时响应**: 支持打字指示器，提供即时反馈
+- **代码理解**: AI能够分析当前代码文件和项目结构
+- **多语言支持**: 支持主流编程语言的代码分析和建议
+- **消息历史**: 完整的对话历史记录，支持时间戳显示
 
-\!\[feature X\]\(images/feature-x.png\)
+### 🔧 代码辅助功能
+- **快速操作**: 一键解释代码、优化代码、调试代码、生成测试
+- **文件附加**: 支持拖拽或选择文件附加到对话中
+- **代码格式化**: 自动识别和格式化代码块
+- **智能补全**: AI驱动的代码补全建议
+- **错误修复**: 自动检测并建议修复代码错误
+- **代码重构**: 智能代码重构和优化建议
 
-> Tip: Many popular extensions utilize animations. This is an excellent way to show off your extension! We recommend short, focused animations that are easy to follow.
+### 🎯 开发者体验
+- **侧边栏集成**: 专用的AI助手侧边栏面板，现代化UI设计
+- **快捷键支持**: Enter发送消息，Shift+Enter换行
+- **响应式设计**: 自适应界面布局，支持不同屏幕尺寸
+- **设置面板**: 便捷的设置访问，支持模型选择
+- **清空功能**: 一键清空聊天历史
+- **状态管理**: 智能的界面状态管理和自动滚动
 
-## Requirements
+## 🚀 快速开始
 
-If you have any requirements or dependencies, add a section describing those and how to install and configure them.
+### 安装要求
+- VSCode 1.101.2 或更高版本
+- Node.js 16+ (用于开发)
+- Python 3.12+ (用于AI Agent后端)
 
-## Extension Settings
+### 开发环境设置
 
-Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
+```bash
+# 1. 克隆项目
+git clone <repository-url>
+cd NEXAIDE-Plugin/nexaide
 
-For example:
+# 2. 安装依赖
+npm install
 
-This extension contributes the following settings:
+# 3. 编译插件
+npm run compile
 
-* `myExtension.enable`: Enable/disable this extension.
-* `myExtension.thing`: Set to `blah` to do something.
+# 4. 在VSCode中按F5启动调试
+```
 
-## Known Issues
+### 使用方法
 
-Calling out known issues can help limit users opening duplicate issues against your extension.
+1. **打开AI助手**: 点击侧边栏的NEXAIDE AI图标
+2. **开始对话**: 在聊天框中输入问题或请求
+3. **快速操作**: 使用快速操作按钮（解释、优化、调试、测试）
+4. **文件附加**: 点击📎按钮附加文件到对话中
+5. **获取建议**: AI会基于当前代码上下文提供建议
+6. **清空聊天**: 使用🗑️按钮清空聊天历史
 
-## Release Notes
+### 🎨 界面特色
 
-Users appreciate release notes as you update your extension.
+- **现代化设计**: 采用渐变色头部设计，视觉效果优雅
+- **流畅动画**: 消息发送和接收带有平滑的动画效果
+- **代码高亮**: 自动识别代码块并进行语法高亮
+- **响应式布局**: 适配不同尺寸的侧边栏宽度
+- **状态指示**: 清晰的加载状态和错误提示
 
-### 1.0.0
+### 💡 使用技巧
 
-Initial release of ...
+- 使用 `Enter` 键快速发送消息
+- 使用 `Shift + Enter` 在消息中换行
+- 尝试发送包含"JavaScript"、"Python"、"调试"等关键词获得专业回复
+- 附加代码文件可以获得更精准的分析建议
 
-### 1.0.1
+## 📸 功能演示
 
-Fixed issue #.
+### 主界面
+```
+┌─────────────────────────────────────┐
+│ 🤖 NEXAIDE AI                    ⚙️│
+├─────────────────────────────────────┤
+│                                     │
+│ 💬 AI: 你好！我是NEXAIDE AI助手...   │
+│                                     │
+│ 👤 用户: 解释这段JavaScript代码      │
+│                                     │
+│ 💬 AI: 这段代码实现了...            │
+│                                     │
+├─────────────────────────────────────┤
+│ [💡解释] [⚡优化] [🐛调试] [🧪测试]    │
+├─────────────────────────────────────┤
+│ 输入消息... 📎              [发送] │
+└─────────────────────────────────────┘
 
-### 1.1.0
+```
 
-Added features X, Y, and Z.
+### 快速操作
+- **💡 解释代码**: 一键获取代码解释和分析
+- **⚡ 优化代码**: 获得代码优化建议
+- **🐛 调试代码**: 帮助定位和修复问题
+- **🧪 生成测试**: 自动生成测试用例
+
+## ⚙️ 配置选项
+
+插件提供以下配置选项：
+
+* `nexaide.enable`: 启用/禁用NEXAIDE插件
+* `nexaide.model`: 选择AI模型 (GPT-4, Claude, 等)
+* `nexaide.apiKey`: 设置AI服务API密钥
+* `nexaide.autoAnalysis`: 启用自动代码分析
+* `nexaide.contextWindow`: 设置上下文窗口大小
+
+## 🔌 与Trae-Agent集成
+
+NEXAIDE Plugin与Trae-Agent深度集成，提供强大的AI编程能力：
+
+- **本地Agent服务**: 启动本地Trae-Agent服务
+- **工具链集成**: 使用Trae-Agent的丰富工具生态
+- **任务执行**: 执行复杂的软件工程任务
+- **代码生成**: 基于自然语言描述生成代码
+
+## 🛠️ 技术架构
+
+```
+NEXAIDE Plugin
+├── Frontend (TypeScript)
+│   ├── Extension Host
+│   ├── Webview UI
+│   └── Command Handlers
+├── Communication Layer
+│   ├── WebSocket Client
+│   ├── HTTP API Client
+│   └── Message Queue
+└── Integration
+    ├── Trae-Agent Bridge
+    ├── VSCode API
+    └── File System Watcher
+```
+
+## 📋 开发路线图
+
+### v0.1.0 - 基础功能 ✅
+- [x] 基础插件框架
+- [x] 现代化AI聊天界面
+- [x] 完整消息处理系统
+- [x] 快速操作按钮
+- [x] 文件附加功能
+- [x] 设置面板集成
+- [x] 响应式UI设计
+- [x] 代码语法高亮
+- [x] 动画效果和状态管理
+
+### v0.2.0 - AI集成 🔄
+- [ ] Trae-Agent通信桥梁
+- [ ] 代码上下文分析
+- [ ] 智能建议系统
+
+### v0.3.0 - 功能增强 ⏳
+- [ ] 代码补全集成
+- [ ] 错误检测和修复
+- [ ] 重构建议
+
+### v1.0.0 - 完整版本 ⏳
+- [ ] 完整AI功能套件
+- [ ] 性能优化
+- [ ] 用户体验优化
+
+## 🐛 已知问题
+
+- AI响应时间可能较长，正在优化中
+- 某些复杂代码结构的分析准确性有待提升
+- 大型项目的上下文分析性能需要优化
+
+## 📝 更新日志
+
+### 0.1.0 (当前版本)
+- 🎨 现代化UI界面设计
+- 💬 完整的AI聊天功能
+- ⚡ 快速操作按钮（解释、优化、调试、测试）
+- 📎 文件附加功能
+- ⚙️ 设置面板集成
+- 🗑️ 清空聊天功能
+- 🎯 响应式设计和动画效果
+- ⌨️ 键盘快捷键支持
+- 🔍 代码语法高亮
+- 📱 自适应界面布局
+
+## 🤝 贡献指南
+
+欢迎贡献代码和建议！请查看 [CONTRIBUTING.md](../../CONTRIBUTING.md) 了解详细信息。
+
+## 📄 许可证
+
+本项目采用 MIT 许可证 - 查看 [LICENSE](../../LICENSE) 文件了解详情。
+
+---
+
+**让AI成为你的编程伙伴，提升开发效率！** 🚀
 
 ---
 
