@@ -3,6 +3,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as https from 'https';
 
 // AI Chat View Provider
 class AIChatViewProvider implements vscode.WebviewViewProvider {
@@ -47,12 +48,21 @@ class AIChatViewProvider implements vscode.WebviewViewProvider {
 
 	private async handleAIMessage(message: string, model: string) {
 		try {
-			// Simulate AI response (replace with actual AI API call)
-			await new Promise(resolve => setTimeout(resolve, 1000));
-			
-			const aiResponse = this.generateMockAIResponse(message);
+			// 显示正在思考的状态
+			if (this._view) {
+				this._view.webview.postMessage({
+					command: 'showTyping',
+					isTyping: true
+				});
+			}
+
+			const aiResponse = await this.callQwenAPI(message, model);
 			
 			if (this._view) {
+				this._view.webview.postMessage({
+					command: 'showTyping',
+					isTyping: false
+				});
 				this._view.webview.postMessage({
 					command: 'addMessage',
 					content: aiResponse,
@@ -62,51 +72,89 @@ class AIChatViewProvider implements vscode.WebviewViewProvider {
 		} catch (error) {
 			if (this._view) {
 				this._view.webview.postMessage({
+					command: 'showTyping',
+					isTyping: false
+				});
+				this._view.webview.postMessage({
 					command: 'addMessage',
-					content: '❌ 获取AI响应失败，请重试。',
+					content: `❌ 获取AI响应失败: ${error instanceof Error ? error.message : '未知错误'}，请重试。`,
 					type: 'system'
 				});
 			}
 		}
 	}
 
-	private generateMockAIResponse(message: string): string {
-		// Mock AI responses based on message content
-		const lowerMessage = message.toLowerCase();
-		
-		if (lowerMessage.includes('hello') || lowerMessage.includes('hi') || lowerMessage.includes('你好') || lowerMessage.includes('您好')) {
-			return '👋 您好！我是 NEXAIDE AI 编程助手。我可以帮助您进行代码开发、调试和优化。有什么我可以为您做的吗？';
-		}
-		
-		if (lowerMessage.includes('javascript') || lowerMessage.includes('js')) {
-			return '🚀 我可以帮助您处理 JavaScript 相关问题！这里是一个简单的示例：\n\n```javascript\nfunction greet(name) {\n    return `你好, ${name}!`;\n}\n\nconsole.log(greet("世界"));\n```\n\n您想了解 JavaScript 的哪个具体方面呢？';
-		}
-		
-		if (lowerMessage.includes('python')) {
-			return '🐍 Python 是一门很棒的语言！这里是一个快速示例：\n\n```python\ndef fibonacci(n):\n    if n <= 1:\n        return n\n    return fibonacci(n-1) + fibonacci(n-2)\n\nprint(fibonacci(10))\n```\n\n您想了解 Python 的哪个概念呢？';
-		}
-		
-		if (lowerMessage.includes('debug') || lowerMessage.includes('error') || lowerMessage.includes('调试') || lowerMessage.includes('错误')) {
-			return '🔍 我可以帮助您调试代码！请分享：\n\n1. 您看到的错误信息\n2. 相关的代码片段\n3. 您期望发生的情况\n\n这将帮助我提供更有针对性的帮助。';
-		}
-		
-		if (lowerMessage.includes('function') || lowerMessage.includes('method') || lowerMessage.includes('函数') || lowerMessage.includes('方法')) {
-			return '⚡ 函数是编程的基础构建块！以下是一些最佳实践：\n\n• 使用描述性的名称\n• 保持函数小而专注\n• 处理边界情况\n• 添加适当的文档\n\n您有什么具体的函数相关问题吗？';
-		}
-		
-		if (lowerMessage.includes('解释') || lowerMessage.includes('explain')) {
-			return '📖 我很乐意为您解释代码！请粘贴您想要理解的代码片段，我会详细解释其功能和工作原理。';
-		}
-		
-		if (lowerMessage.includes('优化') || lowerMessage.includes('optimize')) {
-			return '⚡ 代码优化是提高性能和可读性的重要步骤！请分享您的代码，我会提供优化建议，包括：\n\n• 性能改进\n• 代码简化\n• 最佳实践应用\n• 可读性提升';
-		}
-		
-		if (lowerMessage.includes('测试') || lowerMessage.includes('test')) {
-			return '🧪 编写测试是确保代码质量的关键！我可以帮助您：\n\n• 生成单元测试\n• 设计测试用例\n• 选择测试框架\n• 测试最佳实践\n\n请分享您需要测试的代码！';
-		}
-		
-		return `💭 我理解您询问的是："${message}"\n\n作为您的 AI 编程助手，我可以帮助您：\n\n• 🔧 代码生成和补全\n• 🐛 调试和错误修复\n• 📊 代码审查和优化\n• 📚 解释编程概念\n• ✨ 最佳实践和模式\n\n请提供更多具体细节，我将为您提供更精准的帮助！`;
+	private async callQwenAPI(message: string, model: string = 'qwen-max'): Promise<string> {
+		return new Promise((resolve, reject) => {
+			const apiKey = 'sk-32800d6692f346d4a17b6d8116964b53';
+			const url = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions';
+			
+			const payload = {
+				model: model,
+				messages: [
+					{
+						role: 'system',
+						content: '你是NEXAIDE AI编程助手，专门帮助开发者进行代码开发、调试和优化。请用简洁、专业的方式回答问题，并在适当时提供代码示例。'
+					},
+					{
+						role: 'user',
+						content: message
+					}
+				],
+				temperature: 1,
+				max_tokens: 8192
+			};
+
+			const postData = JSON.stringify(payload);
+			
+			const options = {
+				hostname: 'dashscope.aliyuncs.com',
+				port: 443,
+				path: '/compatible-mode/v1/chat/completions',
+				method: 'POST',
+				headers: {
+					'Authorization': `Bearer ${apiKey}`,
+					'Content-Type': 'application/json',
+					'Content-Length': Buffer.byteLength(postData)
+				},
+				timeout: 60000
+			};
+
+			const req = https.request(options, (res) => {
+				let data = '';
+				
+				res.on('data', (chunk) => {
+					data += chunk;
+				});
+				
+				res.on('end', () => {
+					try {
+						const result = JSON.parse(data);
+						if (result.choices && result.choices[0] && result.choices[0].message) {
+							resolve(result.choices[0].message.content);
+						} else if (result.error) {
+							reject(new Error(`API错误: ${result.error.message || '未知错误'}`));
+						} else {
+							reject(new Error('API响应格式错误'));
+						}
+					} catch (error) {
+						reject(new Error(`解析响应失败: ${error instanceof Error ? error.message : '未知错误'}`));
+					}
+				});
+			});
+
+			req.on('error', (error) => {
+				reject(new Error(`网络请求失败: ${error.message}`));
+			});
+
+			req.on('timeout', () => {
+				req.destroy();
+				reject(new Error('请求超时，请重试'));
+			});
+
+			req.write(postData);
+			req.end();
+		});
 	}
 
 	public clearChat() {

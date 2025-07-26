@@ -426,6 +426,9 @@
             <div class="model-selector-container">
                 <span class="model-label">模型:</span>
                 <select id="modelSelector" class="model-selector">
+                    <option value="qwen-max" selected>通义千问 Max</option>
+                    <option value="qwen-plus">通义千问 Plus</option>
+                    <option value="qwen-turbo">通义千问 Turbo</option>
                     <option value="gpt-4">GPT-4</option>
                     <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
                     <option value="claude-3-sonnet">Claude 3 Sonnet</option>
@@ -468,7 +471,7 @@
         const modelSelector = document.getElementById('modelSelector');
         
         // Load saved state
-        const state = vscode.getState() || { messages: [], selectedModel: 'gpt-4' };
+        const state = vscode.getState() || { messages: [], selectedModel: 'qwen-max' };
         
         // Restore messages
         if (state.messages && state.messages.length > 0) {
@@ -656,6 +659,13 @@
                 case 'updateModel':
                     modelSelector.value = message.model;
                     saveState();
+                    break;
+                case 'showTyping':
+                    if (message.isTyping) {
+                        showTypingIndicator();
+                    } else {
+                        hideTypingIndicator();
+                    }
                     break;
                 case 'error':
                     hideTypingIndicator();
