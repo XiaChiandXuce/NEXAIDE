@@ -1,247 +1,176 @@
 # NEXAIDE Plugin - AI编程助手插件
 
-**NEXAIDE Plugin** 是一个现代化的VSCode扩展，为开发者提供AI驱动的编程辅助功能。基于先进的大语言模型，NEXAIDE能够理解代码上下文，提供智能建议，并协助解决编程问题。插件采用现代化UI设计，提供流畅的用户体验。
+**NEXAIDE Plugin** 是一个现代化的 VS Code 扩展，为开发者提供 AI 驱动的编程辅助能力。基于先进的大语言模型，NEXAIDE 能够理解代码上下文、提供智能建议，并协助完成从解释到生成、调试与重构的各类任务。
 
 ![NEXAIDE Plugin](https://img.shields.io/badge/NEXAIDE-AI%20Assistant-blue?style=for-the-badge&logo=visualstudiocode)
 ![Version](https://img.shields.io/badge/version-0.1.0-green?style=for-the-badge)
 ![License](https://img.shields.io/badge/license-MIT-orange?style=for-the-badge)
 
-## ✨ 核心功能
+---
 
-### 🤖 AI聊天助手
-- **现代化界面**: 美观的渐变色设计，流畅的动画效果
-- **智能对话**: 集成通义千问API，提供专业的编程助手服务
-- **实时响应**: 支持打字指示器，提供即时反馈
-- **代码理解**: AI能够分析当前代码文件和项目结构
-- **多语言支持**: 支持主流编程语言的代码分析和建议
-- **消息历史**: 完整的对话历史记录，支持时间戳显示
+## ✨ 核心能力概览
 
-### 🔧 代码辅助功能
-- **快速操作**: 一键解释代码、优化代码、调试代码、生成测试
-- **文件附加**: 支持拖拽或选择文件附加到对话中
-- **代码格式化**: 自动识别和格式化代码块
-- **智能补全**: AI驱动的代码补全建议
-- **错误修复**: 自动检测并建议修复代码错误
-- **代码重构**: 智能代码重构和优化建议
+### 🤖 AI 聊天助手
+- 现代化界面与流畅动画，支持打字指示器与状态提示
+- 基于通义千问模型的智能对话与代码理解
+- 识别并高亮代码块，支持多语言代码分析
+- 完整消息历史，带时间戳展示
 
-### 🎯 开发者体验
-- **侧边栏集成**: 专用的AI助手侧边栏面板，现代化UI设计
-- **快捷键支持**: Enter发送消息，Shift+Enter换行
-- **响应式设计**: 自适应界面布局，支持不同屏幕尺寸
-- **设置面板**: 便捷的设置访问，支持模型选择
-- **会话管理**: 新建会话、历史会话、AI功能管理等完整功能
-- **窗口控制**: 支持关闭插件窗口等界面操作
-- **状态管理**: 智能的界面状态管理和自动滚动
+### 🔧 代码辅助
+- 一键解释、优化、调试、生成测试
+- 支持文件拖拽/选择附加到会话
+- 自动格式化代码块与生成建议
+- 错误修复与重构建议
+
+### 🧠 项目上下文与 Agent
+- 深度集成 Trae-Agent，支持复杂软件工程任务执行
+- 严格的“项目工作目录”机制，确保文件写入落地到正确位置
+- 在无法确定工作目录时自动回退为普通聊天模式，保证可用性
+
+---
 
 ## 🚀 快速开始
 
-### 安装要求
-- VSCode 1.101.2 或更高版本
-- Node.js 16+ (用于开发)
-- Python 3.12+ (用于AI Agent后端)
+### 环境要求
+- VS Code ≥ 1.101.2
+- Node.js ≥ 16（开发时需要）
+- Python ≥ 3.12（AI Agent 后端需要）
 
-### 开发环境设置
+### 安装与编译
 
 ```bash
-# 1. 克隆项目
+# 克隆项目
 git clone <repository-url>
 cd NEXAIDE-Plugin/nexaide
 
-# 2. 安装依赖
+# 安装依赖
 npm install
 
-# 3. 编译插件
+# 编译生成 dist/extension.js
 npm run compile
-
-# 4. 在VSCode中按F5启动调试
 ```
 
-### 使用方法
+### 启动扩展（开发模式）
+- 在终端执行：
 
-1. **打开AI助手**: 点击侧边栏的NEXAIDE AI图标
-2. **开始对话**: 在聊天框中输入问题或请求
-3. **快速操作**: 使用快速操作按钮（解释、优化、调试、测试）
-4. **文件附加**: 点击📎按钮附加文件到对话中
-5. **会话管理**: 
-   - 点击➕按钮新建会话
-   - 点击📋按钮查看历史会话
-   - 点击🔧按钮管理AI功能
-6. **窗口控制**: 点击✖️按钮关闭插件窗口
-7. **获取建议**: AI会基于当前代码上下文提供建议
-
-### 🎨 界面特色
-
-- **现代化设计**: 采用渐变色头部设计，视觉效果优雅
-- **流畅动画**: 消息发送和接收带有平滑的动画效果
-- **代码高亮**: 自动识别代码块并进行语法高亮
-- **响应式布局**: 适配不同尺寸的侧边栏宽度
-- **状态指示**: 清晰的加载状态和错误提示
-
-### 💡 使用技巧
-
-- 使用 `Enter` 键快速发送消息
-- 使用 `Shift + Enter` 在消息中换行
-- 尝试发送包含"JavaScript"、"Python"、"调试"等关键词获得专业回复
-- 附加代码文件可以获得更精准的分析建议
-
-## 📸 功能演示
-
-### 主界面
-```
-┌─────────────────────────────────────┐
-│ 🤖 NEXAIDE AI    ➕📋🔧🗑️⚙️✖️│
-├─────────────────────────────────────┤
-│                                     │
-│ 💬 AI: 你好！我是NEXAIDE AI助手...   │
-│                                     │
-│ 👤 用户: 解释这段JavaScript代码      │
-│                                     │
-│ 💬 AI: 这段代码实现了...            │
-│                                     │
-├─────────────────────────────────────┤
-│ [💡解释] [⚡优化] [🐛调试] [🧪测试]    │
-├─────────────────────────────────────┤
-│ 输入消息... 📎              [发送] │
-└─────────────────────────────────────┘
+```bash
+code --extensionDevelopmentPath "D:\TYHProjectLibrary\AICcompiler\NEXAIDE\NEXAIDE-Plugin\nexaide"
 ```
 
-### 功能图标说明
-- **➕ 新建会话**: 创建新的对话会话，清空当前聊天记录
-- **📋 历史会话**: 查看和管理历史对话记录（开发中）
-- **🔧 AI功能管理**: 管理AI相关功能和设置（开发中）
-- **🗑️ 清空对话**: 清空当前聊天历史
-- **⚙️ 设置**: 打开插件设置面板
-- **✖️ 关闭窗口**: 关闭插件侧边栏窗口
+- 或者在 VS Code 按 F5 启动扩展开发主机。
 
-### 快速操作
-- **💡 解释代码**: 一键获取代码解释和分析
-- **⚡ 优化代码**: 获得代码优化建议
-- **🐛 调试代码**: 帮助定位和修复问题
-- **🧪 生成测试**: 自动生成测试用例
+---
 
-## ⚙️ 配置选项
+## 重要概念：项目工作目录（Working Directory）
 
-插件已集成通义千问API，支持以下配置：
+Agent 相关能力依赖“项目工作目录”，用于确定文件生成/修改的落地路径。扩展会按以下优先级解析工作目录：
 
-* **API集成**: 使用阿里云通义千问API (qwen-max-2025-01-25)
-* **模型选择**: 支持多种通义千问模型
-* **智能参数**: 温度值1.0，最大令牌8192
-* **错误处理**: 完善的网络错误和API错误处理
-* **超时设置**: 60秒请求超时，确保稳定性
+1) 当前活动编辑器所属的工作区根目录（如有活动文件）
+2) 当存在多个工作区时，选择第一个工作区根目录
+3) 当没有打开任何工作区时，弹出系统文件夹选择对话框，请手动选择项目根目录
+4) 若用户取消选择或仍无法确定，则不进入 Agent 模式，自动回退为普通聊天
 
-## 🔌 与Trae-Agent集成
+TraeAgentService 在执行 Agent 任务时需要显式传入 `workingDirectory`。缺失时会返回错误并提示：
 
-NEXAIDE Plugin与Trae-Agent深度集成，提供强大的AI编程能力：
+> Project working directory not detected. Please open the project root directory or select a working directory in the interface before executing the Agent. Automatically switched to normal mode, you can continue the conversation.
 
-- **本地Agent服务**: 启动本地Trae-Agent服务
-- **工具链集成**: 使用Trae-Agent的丰富工具生态
-- **任务执行**: 执行复杂的软件工程任务
-- **代码生成**: 基于自然语言描述生成代码
+### 建议的使用姿势
+- 推荐先“打开项目根目录”为工作区，再在侧边栏打开 NEXAIDE 面板并开始对话
+- 若希望在无工作区下使用 Agent，请在弹出的文件夹选择框中选择目标目录
+- 之后的文件创建/修改会在该工作目录下进行（例如生成 `tetris.py` 等）
+
+---
+
+## 使用指南
+
+1. 打开侧边栏的 NEXAIDE 图标以进入聊天面板
+2. 在输入框中提问或描述任务（可附加代码/文件）
+3. 使用快捷操作：解释、优化、调试、生成测试
+4. 查看会话历史、管理设置与清空对话等
+5. 需要执行涉及代码生成/修改的任务时，确保已选择或打开正确的工作目录
+
+### 界面与交互
+- Enter 发送消息，Shift+Enter 换行
+- 渐变头部与状态提示、平滑的消息动画、代码块高亮
+- 响应式布局，支持不同侧边栏宽度
+
+---
+
+## 🔌 与 Trae-Agent 的集成
+
+- 通过 TraeAgentService 承载 Agent 任务执行，要求显式的 `workingDirectory`
+- 支持 CLI 回退机制并向 Agent 传递 `--working-dir` 参数
+- 在工作目录不确定时提示并回退为普通聊天，避免误写到非预期路径
+
+---
 
 ## 🛠️ 技术架构
 
 ```
 NEXAIDE Plugin
 ├── Frontend (TypeScript)
-│   ├── Extension Host
-│   ├── Webview UI
-│   └── Command Handlers
-├── Communication Layer
-│   ├── WebSocket Client
-│   ├── HTTP API Client
-│   └── Message Queue
+│   ├── Extension Host（命令与消息处理）
+│   ├── Webview UI（聊天与操作面板）
+│   └── Command Handlers（快捷操作）
+├── Services
+│   └── Trae-Agent Bridge（TraeAgentService）
 └── Integration
-    ├── Trae-Agent Bridge
-    ├── VSCode API
+    ├── VS Code API
     └── File System Watcher
 ```
 
-## 📋 开发路线图
+---
 
-### v0.1.0 - 基础功能 ✅
-- [x] 基础插件框架
-- [x] 现代化AI聊天界面
-- [x] 完整消息处理系统
-- [x] 快速操作按钮
-- [x] 文件附加功能
-- [x] 设置面板集成
-- [x] 响应式UI设计
-- [x] 代码语法高亮
-- [x] 动画效果和状态管理
+## ⚙️ 配置选项
 
-### v0.2.0 - AI集成 🔄
-- [ ] Trae-Agent通信桥梁
-- [ ] 代码上下文分析
-- [ ] 智能建议系统
+- 通义千问 API 集成（示例：qwen 系列模型）
+- 模型选择与智能参数（温度、最大 tokens 等）
+- 超时与错误处理（网络/API 错误）
 
-### v0.3.0 - 功能增强 ⏳
-- [ ] 代码补全集成
-- [ ] 错误检测和修复
-- [ ] 重构建议
+> 注意：请勿在代码或设置中提交任何密钥或敏感信息。
 
-### v1.0.0 - 完整版本 ⏳
-- [ ] 完整AI功能套件
-- [ ] 性能优化
-- [ ] 用户体验优化
+---
 
-## 🐛 已知问题
+## 🧪 典型场景与示例
 
-- AI响应时间可能较长，正在优化中
-- 某些复杂代码结构的分析准确性有待提升
-- 大型项目的上下文分析性能需要优化
+- 解释项目中的某个函数/类，并给出重构建议
+- 在选定的工作目录下生成新文件（如示例脚本/测试用例）
+- 根据自然语言描述创建初始代码骨架并落地到项目根目录
+
+---
+
+## 🐛 常见问题与排查
+
+- 提示“未检测到项目工作目录”怎么办？
+  - 打开项目根目录作为工作区，或在弹窗中手动选择文件夹
+  - 若刚更新代码，请执行 `npm run compile` 并在扩展开发主机中“重新加载窗口”（Ctrl+R）
+  - 确认 Node/Python 版本满足要求，依赖安装完成（`npm install`）
+
+- 文件没有生成到预期位置？
+  - 检查当前活动编辑器所属的工作区是否为期望的目录
+  - 在多工作区场景下，默认使用第一个工作区根目录；可通过切换活动文件来影响解析
+
+---
 
 ## 📝 更新日志
 
-### 0.1.0 (当前版本)
-- 🎨 现代化UI界面设计
-- 💬 完整的AI聊天功能
-- 🤖 **通义千问API集成** - 真实AI对话能力
-- ⚡ 快速操作按钮（解释、优化、调试、测试）
-- 📎 文件附加功能
-- ⚙️ 设置面板集成
-- 🗑️ 清空聊天功能
-- ➕ **新建会话功能** - 一键创建新的对话会话
-- 📋 **历史会话管理** - 历史对话记录功能（开发中）
-- 🔧 **AI功能管理** - AI相关功能设置（开发中）
-- ✖️ **窗口控制** - 关闭插件窗口功能
-- 🎯 响应式设计和动画效果
-- ⌨️ 键盘快捷键支持
-- 🔍 代码语法高亮
-- 📱 自适应界面布局
-- ⏳ **打字指示器** - 显示AI思考状态
-- ⚠️ **错误处理** - 完善的API错误提示
+### 0.1.0
+- 现代化聊天 UI 与代码高亮
+- 快速操作按钮：解释 / 优化 / 调试 / 测试
+- 文件附加与设置面板、清空与新建会话、历史会话（开发中）
+- 与 Trae-Agent 的桥接与工作目录校验机制
+- 在无法确定工作目录时自动回退普通模式并提示
 
-## 🤝 贡献指南
+---
 
-欢迎贡献代码和建议！请查看 [CONTRIBUTING.md](../../CONTRIBUTING.md) 了解详细信息。
+## 🤝 贡献
+
+欢迎贡献代码与建议！请先阅读项目的贡献与代码规范（CONTRIBUTING / DEVELOPMENT 指南）。
 
 ## 📄 许可证
 
-本项目采用 MIT 许可证 - 查看 [LICENSE](../../LICENSE) 文件了解详情。
+本项目采用 MIT 许可证，详见 LICENSE。
 
 ---
 
-**让AI成为你的编程伙伴，提升开发效率！** 🚀
-
----
-
-## Following extension guidelines
-
-Ensure that you've read through the extensions guidelines and follow the best practices for creating your extension.
-
-* [Extension Guidelines](https://code.visualstudio.com/api/references/extension-guidelines)
-
-## Working with Markdown
-
-You can author your README using Visual Studio Code. Here are some useful editor keyboard shortcuts:
-
-* Split the editor (`Cmd+\` on macOS or `Ctrl+\` on Windows and Linux).
-* Toggle preview (`Shift+Cmd+V` on macOS or `Shift+Ctrl+V` on Windows and Linux).
-* Press `Ctrl+Space` (Windows, Linux, macOS) to see a list of Markdown snippets.
-
-## For more information
-
-* [Visual Studio Code's Markdown Support](http://code.visualstudio.com/docs/languages/markdown)
-* [Markdown Syntax Reference](https://help.github.com/articles/markdown-basics/)
-
-**Enjoy!**
+让 AI 成为你的编程伙伴，显著提升开发效率！🚀
