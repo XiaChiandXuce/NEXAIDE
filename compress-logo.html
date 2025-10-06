@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PNG图片压缩工具 - 缩小100倍</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .upload-area {
+            border: 2px dashed #ccc;
+            border-radius: 10px;
+            padding: 40px;
+            text-align: center;
+            margin-bottom: 20px;
+            transition: border-color 0.3s;
+        }
+        .upload-area:hover {
+            border-color: #007cba;
+        }
+        .upload-area.dragover {
+            border-color: #007cba;
+            background-color: #f0f8ff;
+        }
+        input[type="file"] {
+            display: none;
+        }
+        .upload-btn {
+            background: #007cba;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        .upload-btn:hover {
+            background: #005a8b;
+        }
+        .preview-area {
+            display: flex;
+            gap: 20px;
+            margin-top: 20px;
+        }
+        .preview-box {
+            flex: 1;
+            text-align: center;
+        }
+        .preview-box h3 {
+            margin-bottom: 10px;
+            color: #333;
+        }
+        .preview-box img {
+            max-width: 100%;
+            max-height: 300px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .info {
+            margin-top: 10px;
+            font-size: 14px;
+            color: #666;
+        }
+        .download-btn {
+            background: #28a745;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-top: 10px;
+            text-decoration: none;
+            display: inline-block;
+        }
+        .download-btn:hover {
+            background: #218838;
+        }
+        .hidden {
+            display: none;
+        }
+        canvas {
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🖼️ PNG图片压缩工具</h1>
+        <p style="text-align: center; color: #666; margin-bottom: 30px;">
+            将PNG图片等比例缩小100倍（面积缩小，宽高各缩小10倍）
+        </p>
+        
+        <div class="upload-area" id="uploadArea">
+            <p>📁 拖拽PNG图片到这里，或者点击下方按钮选择文件</p>
+            <button class="upload-btn" onclick="document.getElementById('fileInput').click()">
+                选择PNG图片
+            </button>
+            <input type="file" id="fileInput" accept="image/png" onchange="handleFileSelect(event)">
+        </div>
+        
+        <div class="preview-area hidden" id="previewArea">
+            <div class="preview-box">
+                <h3>原始图片</h3>
+                <img id="originalImage" alt="原始图片">
+                <div class="info" id="originalInfo"></div>
+            </div>
+            <div class="preview-box">
+                <h3>压缩后图片</h3>
+                <canvas id="compressedCanvas"></canvas>
+                <div class="info" id="compressedInfo"></div>
+                <a class="download-btn hidden" id="downloadBtn" download="nexaide-logo-compressed.png">
+                    💾 下载压缩图片
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 拖拽上传功能
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+        
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+        
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            const files = e.dataTransfer.files;
+            if (files.length > 0 && files[0].type === 'image/png') {
+                handleFile(files[0]);
+            } else {
+                alert('请选择PNG格式的图片文件！');
+            }
+        });
+        
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (file && file.type === 'image/png') {
+                handleFile(file);
+            } else {
+                alert('请选择PNG格式的图片文件！');
+            }
+        }
+        
+        function handleFile(file) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const img = new Image();
+                img.onload = function() {
+                    compressImage(img, file);
+                };
+                img.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+        
+        function compressImage(originalImg, file) {
+            // 显示预览区域
+            document.getElementById('previewArea').classList.remove('hidden');
+            
+            // 显示原始图片
+            const originalImage = document.getElementById('originalImage');
+            originalImage.src = originalImg.src;
+            
+            // 显示原始图片信息
+            const originalInfo = document.getElementById('originalInfo');
+            const originalSize = (file.size / 1024).toFixed(2);
+            originalInfo.innerHTML = `
+                尺寸: ${originalImg.width} × ${originalImg.height}px<br>
+                文件大小: ${originalSize} KB
+            `;
+            
+            // 计算压缩后的尺寸（缩小100倍意味着面积缩小100倍，所以宽高各缩小10倍）
+            const scaleFactor = 0.1;
+            const newWidth = Math.round(originalImg.width * scaleFactor);
+            const newHeight = Math.round(originalImg.height * scaleFactor);
+            
+            // 创建canvas并绘制压缩后的图片
+            const canvas = document.getElementById('compressedCanvas');
+            const ctx = canvas.getContext('2d');
+            
+            canvas.width = newWidth;
+            canvas.height = newHeight;
+            
+            // 设置高质量缩放
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+            
+            // 绘制缩小后的图片
+            ctx.drawImage(originalImg, 0, 0, newWidth, newHeight);
+            
+            // 转换为blob并计算压缩后的大小
+            canvas.toBlob(function(blob) {
+                const compressedSize = (blob.size / 1024).toFixed(2);
+                const compressionRatio = ((file.size - blob.size) / file.size * 100).toFixed(2);
+                
+                // 显示压缩后图片信息
+                const compressedInfo = document.getElementById('compressedInfo');
+                compressedInfo.innerHTML = `
+                    尺寸: ${newWidth} × ${newHeight}px<br>
+                    文件大小: ${compressedSize} KB<br>
+                    压缩率: ${compressionRatio}%
+                `;
+                
+                // 设置下载链接
+                const downloadBtn = document.getElementById('downloadBtn');
+                const url = URL.createObjectURL(blob);
+                downloadBtn.href = url;
+                downloadBtn.classList.remove('hidden');
+                
+                // 清理之前的URL
+                downloadBtn.onclick = function() {
+                    setTimeout(() => URL.revokeObjectURL(url), 100);
+                };
+                
+            }, 'image/png', 1.0);
+        }
+    </script>
+</body>
+</html>
