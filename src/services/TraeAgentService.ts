@@ -29,12 +29,238 @@ export class TraeAgentService {
     // MCP 客户端相关属性
     private mcpClient: Client | null = null;
     private mcpTransport: StdioClientTransport | null = null;
+    // 进度与交互相关
+    private progressCallback?: (data: string) => void;
+    private nextResultResolvers: Array<(resp: TraeAgentResponse) => void> = [];
     private mcpConnectingPromise: Promise<boolean> | undefined;
 
     constructor(extensionPath: string) {
         // 使用正确的 trae-agent-main 路径
         this.traeAgentPath = 'D:\\TYHProjectLibrary\\AICcompiler\\NEXAIDE\\trae-agent-main';
         this.initializationPromise = this.checkAvailability();
+    }
+
+    /**
+     * 使用 Trae-Agent 的交互模式执行任务（simple console）。
+     * 通过 stdin 依次喂入 task 与 working directory；完成一次任务后发送 exit 结束会话。
+     */
+    public async executeAgentInteractive(
+        message: string,
+        options: {
+            timeout?: number;
+            maxDuration?: number;
+            workingDirectory?: string;
+            onProgress?: (data: string) => void;
+        } = {}
+    ): Promise<TraeAgentResponse> {
+        if (!this.isAvailable) {
+            return {
+                success: false,
+                content: '',
+                error: 'Trae-agent is not available. Please ensure it is properly installed.'
+            };
+        }
+
+        if (!options.workingDirectory) {
+            return {
+                success: false,
+                content: '',
+                error: '未检测到项目工作目录。请先打开项目根目录或在界面中选择工作目录后再执行 Agent。'
+            };
+        }
+        const workingDir = options.workingDirectory;
+
+        return new Promise((resolve) => {
+            const timeout = options.timeout ?? 300000; // 不活动窗口 300s
+            const maxDuration = options.maxDuration ?? 900000; // 总时长 15min 上限
+
+            let output = '';
+            let errorOutput = '';
+            let isResolved = false;
+            let trajectoryPath: string | undefined;
+
+            const configPath = path.join(this.traeAgentPath, 'trae_config.yaml');
+            const args = [
+                'interactive',
+                '--config-file',
+                configPath,
+                '--console-type',
+                'simple',
+                '--agent-type',
+                'trae_agent',
+            ];
+            this.logDebug(`Launching interactive CLI: ${this.traeCommand} ${JSON.stringify(args)}`, options.onProgress);
+
+            this.currentProcess = spawn(this.traeCommand, args, {
+                stdio: ['pipe', 'pipe', 'pipe'],
+                cwd: workingDir,
+                env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' }
+            });
+
+            // 记录进度回调（允许后续继续任务复用）
+            this.progressCallback = options.onProgress;
+
+            // 写入一轮交互（Task、Working Directory），随后在任务完成后发送 exit 结束会话
+            const feedInputs = () => {
+                try {
+                    this.currentProcess?.stdin?.write(`${message}\n`);
+                    this.currentProcess?.stdin?.write(`${workingDir}\n`);
+                } catch (e) {
+                    // 忽略写入异常，让错误由进程错误事件处理
+                }
+            };
+
+            // 超时管理
+            let timeoutId: NodeJS.Timeout;
+            let overallTimeoutId: NodeJS.Timeout;
+            const onTimeout = () => {
+                if (!isResolved && this.currentProcess) {
+                    this.currentProcess.kill('SIGTERM');
+                    isResolved = true;
+                    resolve({
+                        success: false,
+                        content: this.sanitizeOutput(output),
+                        error: 'Trae-agent interactive execution timed out'
+                    });
+                }
+            };
+            const onOverallTimeout = () => {
+                if (!isResolved && this.currentProcess) {
+                    this.currentProcess.kill('SIGTERM');
+                    isResolved = true;
+                    resolve({
+                        success: false,
+                        content: this.sanitizeOutput(output),
+                        error: 'Trae-agent interactive execution reached max total duration'
+                    });
+                }
+            };
+            const refreshTimeout = () => {
+                if (timeoutId) { clearTimeout(timeoutId); }
+                timeoutId = setTimeout(onTimeout, timeout);
+            };
+            refreshTimeout();
+            overallTimeoutId = setTimeout(onOverallTimeout, maxDuration);
+
+            // 处理 stdout
+            this.currentProcess.stdout?.on('data', (data) => {
+                const chunkRaw = data.toString();
+                const chunk = this.sanitizeOutput(chunkRaw);
+                output += chunk;
+                refreshTimeout();
+
+                // 捕获“Trajectory saved to:” 获取轨迹文件路径
+                const trajMatch = chunk.match(/Trajectory saved to:\s*(.+)$/m);
+                if (trajMatch && trajMatch[1]) {
+                    trajectoryPath = trajMatch[1].trim();
+                    // 一旦检测到轨迹保存，立即解析并返回本轮结果，但不关闭会话
+                    const traj = this.parseTrajectoryFile(trajectoryPath);
+                    const finalContent = traj?.final_result ?? this.sanitizeOutput(output.trim());
+                    const toolCalls = traj?.toolCalls ?? this.parseToolCalls(output);
+                    const response: TraeAgentResponse = {
+                        success: true,
+                        content: finalContent,
+                        toolCalls,
+                        mode: 'cli',
+                    };
+                    if (!isResolved) {
+                        isResolved = true;
+                        try { clearTimeout(timeoutId); } catch {}
+                        try { clearTimeout(overallTimeoutId); } catch {}
+                        resolve(response);
+                    } else if (this.nextResultResolvers.length > 0) {
+                        const resolver = this.nextResultResolvers.shift();
+                        try { resolver && resolver(response); } catch {}
+                    }
+                }
+
+                const cb = this.progressCallback || options.onProgress;
+                if (cb) {
+                    cb(chunk);
+                }
+            });
+
+            // 处理 stderr
+            this.currentProcess.stderr?.on('data', (data) => {
+                const errRaw = data.toString();
+                errorOutput += this.sanitizeOutput(errRaw);
+                refreshTimeout();
+            });
+
+            // 启动后立即喂入交互输入
+            setTimeout(feedInputs, 50);
+
+            // 监听进程关闭
+            this.currentProcess.on('close', (code) => {
+                clearTimeout(timeoutId);
+                clearTimeout(overallTimeoutId);
+                this.currentProcess = null;
+
+                if (!isResolved) {
+                    isResolved = true;
+                    const traj = trajectoryPath ? this.parseTrajectoryFile(trajectoryPath) : null;
+                    const finalContent = traj?.final_result ?? this.sanitizeOutput(output.trim());
+                    const toolCalls = traj?.toolCalls ?? this.parseToolCalls(output);
+                    const success = code === 0 && (traj?.success !== false);
+
+                    resolve({
+                        success,
+                        content: finalContent,
+                        toolCalls,
+                        error: code === 0 ? undefined : (errorOutput.trim() || `Process exited with code ${code}`),
+                        mode: 'cli', // 交互模式仍由 CLI 承载
+                    });
+                }
+            });
+
+            // 监听错误
+            this.currentProcess.on('error', (error) => {
+                clearTimeout(timeoutId);
+                clearTimeout(overallTimeoutId);
+                this.currentProcess = null;
+
+                if (!isResolved) {
+                    isResolved = true;
+                    resolve({
+                        success: false,
+                        content: this.sanitizeOutput(output),
+                        error: `Process error: ${error.message}`,
+                        mode: 'cli',
+                    });
+                }
+            });
+
+            // 移除自动发送 exit 的逻辑，保持交互会话打开
+        });
+    }
+
+    /**
+     * 继续向当前交互会话输入多行（如：新的任务与同工作目录），并等待下一次结果。
+     */
+    public async sendInteractiveInput(lines: string[], onProgress?: (data: string) => void): Promise<TraeAgentResponse> {
+        if (!this.currentProcess) {
+            return Promise.resolve({ success: false, content: '', error: 'No active interactive session', mode: 'cli' });
+        }
+        // 更新进度回调（如果提供）
+        if (onProgress) {
+            this.progressCallback = onProgress;
+        }
+        try {
+            for (const ln of lines) {
+                this.currentProcess.stdin?.write(`${ln}\n`);
+            }
+        } catch (e) {
+            return Promise.resolve({ success: false, content: '', error: `Failed to write to stdin: ${e instanceof Error ? e.message : String(e)}`, mode: 'cli' });
+        }
+        // 返回一个 Promise，等待下一次轨迹保存事件触发（由 stdout 监听解析）
+        return new Promise<TraeAgentResponse>((resolve) => {
+            this.nextResultResolvers.push(resolve);
+        });
+    }
+
+    /** 设置/替换进度回调 */
+    public setProgressCallback(cb?: (data: string) => void): void {
+        this.progressCallback = cb;
     }
 
     /**

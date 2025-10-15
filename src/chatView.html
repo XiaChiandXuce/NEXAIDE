@@ -570,7 +570,8 @@
                     <div class="mode-indicator"></div>
                 </button>
                 <button class="header-btn" id="agentInfoBtn" title="Agent 信息">ℹ️</button>
-                <button class="header-btn" id="stopAgentBtn" title="停止 Agent" style="display: none;">⏹️</button>
+                <button class="header-btn" id="continueAgentBtn" title="继续任务" style="display: none;">⏭️</button>
+                <button class="header-btn" id="stopAgentBtn" title="结束会话" style="display: none;">⏹️</button>
                 <button class="header-btn" id="newSessionBtn" title="新建会话">➕</button>
                 <button class="header-btn" id="historyBtn" title="历史会话">📋</button>
                 <button class="header-btn" id="aiManageBtn" title="AI功能管理">🔧</button>
@@ -659,6 +660,7 @@
         // Agent mode elements
         const agentToggle = document.getElementById('agentToggle');
         const agentInfoBtn = document.getElementById('agentInfoBtn');
+        const continueAgentBtn = document.getElementById('continueAgentBtn');
         const stopAgentBtn = document.getElementById('stopAgentBtn');
         const agentStatus = document.getElementById('agentStatus');
         const agentStatusMessage = document.getElementById('agentStatusMessage');
@@ -711,6 +713,7 @@
         // Agent mode event listeners
         agentToggle.addEventListener('click', toggleAgentMode);
         agentInfoBtn.addEventListener('click', getAgentInfo);
+        continueAgentBtn.addEventListener('click', continueAgent);
         stopAgentBtn.addEventListener('click', stopAgent);
         
         // Close agent status overlay when clicking outside
@@ -865,14 +868,16 @@
         
         // Agent mode functions
         function toggleAgentMode() {
+            // 即使前端判断为不可用，也请求后端再次校验并处理切换
             if (!isAgentAvailable) {
-                showMessage('⚠️ Trae-Agent 不可用，请检查安装和配置', 'error');
-                return;
+                showMessage('⚠️ Trae-Agent 可用性未知或不可用，正在尝试切换并刷新状态…', 'warning');
             }
-            
+
             isAgentMode = !isAgentMode;
             updateAgentUI();
             vscode.postMessage({ command: 'toggleAgentMode', enabled: isAgentMode });
+            // 紧接着主动请求刷新可用性状态，避免返回插件后状态不同步
+            vscode.postMessage({ command: 'getAgentStatus' });
         }
         
         function getAgentInfo() {
@@ -884,14 +889,20 @@
             hideAgentStatus();
             stopAgentBtn.style.display = 'none';
         }
+
+        function continueAgent() {
+            vscode.postMessage({ command: 'continueAgent' });
+        }
         
         function updateAgentUI() {
             if (isAgentMode && isAgentAvailable) {
                 agentToggle.classList.add('active');
                 agentToggle.title = '切换到普通模式';
+                continueAgentBtn.style.display = 'inline-block';
             } else {
                 agentToggle.classList.remove('active');
                 agentToggle.title = '切换到 Agent 模式';
+                continueAgentBtn.style.display = 'none';
             }
             
             if (!isAgentAvailable) {
@@ -1078,6 +1089,10 @@
                     break;
                 case 'agentProgress':
                     if (message.status === 'executing') {
+                        // 如果工具卡片正在显示，则不再刷进度，避免造成“仍在执行”的错觉
+                        if (window._nexaideToolCallsVisible) {
+                            break;
+                        }
                         showAgentStatus('🤖 Agent 正在执行...', true);
                         updateAgentProgress(message.progress || '');
                     } else if (message.status === 'completed') {
@@ -1093,12 +1108,20 @@
                         updateAgentProgress(`工具调用: ${toolsList}`);
                     }
                     break;
-                // 新增：展示工具调用详情，兼容扩展端发送的 showToolCalls
+                // 展示工具调用详情（瀑布式卡片，从上到下依次排列）
                 case 'showToolCalls':
                     if (Array.isArray(message.toolCalls) && message.toolCalls.length > 0) {
-                        const container = document.createElement('div');
-                        container.className = 'tool-calls';
-                        const cards = message.toolCalls.map(tc => {
+                        window._nexaideToolCallsVisible = true;
+                        hideAgentStatus();
+                        const toolCalls = message.toolCalls;
+                        const header = document.createElement('div');
+                        header.className = 'tool-calls';
+                        header.innerHTML = `<div><strong>🔧 工具调用（共 ${toolCalls.length} 步）</strong></div>`;
+                        chatMessages.appendChild(header);
+
+                        // 逐条渲染命令卡片（瀑布式）
+                        for (let i = 0; i < toolCalls.length; i++) {
+                            const tc = toolCalls[i];
                             const name = tc.name || '未知工具';
                             const params = (tc.parameters !== undefined ? tc.parameters : (tc.arguments !== undefined ? tc.arguments : {}));
                             let commandText = '';
@@ -1117,6 +1140,7 @@
                             card.innerHTML = `
                                 <div class="command-header">
                                     <span class="tool-name">🔧 ${name}</span>
+                                    <span class="step-index">步骤 ${i + 1}/${toolCalls.length}</span>
                                 </div>
                                 <pre class="command-body"><code>${safeCommand}</code></pre>
                                 ${workingDirectory ? `<div class="command-wd">📂 工作目录: <code>${workingDirectory}</code></div>` : ''}
@@ -1128,6 +1152,7 @@
                             const copyBtn = card.querySelector('.cmd-btn.copy');
                             const runBtn = card.querySelector('.cmd-btn.run');
                             copyBtn?.addEventListener('click', () => {
+                                if (!safeCommand) { showMessage('⚠️ 无可复制命令', 'warning'); return; }
                                 navigator.clipboard.writeText(safeCommand).then(() => {
                                     showMessage('✅ 已复制命令到剪贴板', 'success');
                                 }).catch(() => showMessage('❌ 复制失败', 'error'));
@@ -1143,13 +1168,23 @@
                                     workingDirectory: workingDirectory || undefined
                                 });
                             });
-                            return card;
+                            chatMessages.appendChild(card);
+                        }
+
+                        // 统一的“完成并继续”操作按钮，追加在所有卡片之后
+                        const actionBar = document.createElement('div');
+                        actionBar.className = 'tool-actions';
+                        const doneBtn = document.createElement('button');
+                        doneBtn.className = 'cmd-btn done';
+                        doneBtn.textContent = '完成并继续';
+                        doneBtn.addEventListener('click', () => {
+                            window._nexaideToolCallsVisible = false;
+                            vscode.postMessage({ command: 'toolCallsCompleted' });
+                            showMessage('✅ 已完成工具步骤，继续生成回复。', 'success');
                         });
-                        const title = document.createElement('div');
-                        title.innerHTML = '<div><strong>🔧 工具调用（参考 Trae 命令卡片）</strong></div>';
-                        container.appendChild(title);
-                        cards.forEach(c => container.appendChild(c));
-                        chatMessages.appendChild(container);
+                        actionBar.appendChild(doneBtn);
+                        chatMessages.appendChild(actionBar);
+
                         chatMessages.scrollTop = chatMessages.scrollHeight;
                         saveState();
                     }
@@ -1163,6 +1198,20 @@
         });
         
         // Initialize
+        // 初次加载时主动请求 Agent 可用性状态，避免隐藏/显示后状态丢失
+        try {
+            vscode.postMessage({ command: 'getAgentStatus' });
+        } catch (e) {}
+
+        // 当 Webview 重新可见时刷新状态
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) {
+                try {
+                    vscode.postMessage({ command: 'getAgentStatus' });
+                } catch (e) {}
+            }
+        });
+
         chatInput.focus();
     </script>
 </body>

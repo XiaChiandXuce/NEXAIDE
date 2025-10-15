@@ -8,11 +8,14 @@ import { TraeAgentService, TraeAgentResponse } from './services/TraeAgentService
 
 // AI Chat View Provider
 class AIChatViewProvider implements vscode.WebviewViewProvider {
-	public static readonly viewType = 'nexaide.chatView';
-	private _view?: vscode.WebviewView;
-	private traeAgent: TraeAgentService;
-	private useAgentMode: boolean = false;
-	private terminal: vscode.Terminal | undefined;
+    public static readonly viewType = 'nexaide.chatView';
+    private _view?: vscode.WebviewView;
+    private traeAgent: TraeAgentService;
+    private useAgentMode: boolean = false;
+    private terminal: vscode.Terminal | undefined;
+    private _pendingAssistantMessage?: string;
+    private _pendingToolCalls?: any[];
+    private lastWorkingDirectory: string | undefined;
 	
 	constructor(private readonly _extensionUri: vscode.Uri) {
 		this.traeAgent = new TraeAgentService(_extensionUri.fsPath);
@@ -55,6 +58,19 @@ class AIChatViewProvider implements vscode.WebviewViewProvider {
 					case 'toggleAgentMode':
 						await this.toggleAgentMode();
 						break;
+					case 'getAgentStatus': {
+						try {
+							const isAvailable = await this.traeAgent.isTraeAgentAvailable();
+							this._view?.webview.postMessage({
+								command: 'agentStatus',
+								available: isAvailable,
+								info: isAvailable ? '✅ Trae-Agent 已就绪' : '⚠️ Trae-Agent 未检测到，请检查安装和配置'
+							});
+						} catch (e) {
+							// 忽略发送异常
+						}
+						break;
+					}
 					case 'stopAgent':
 						this.stopAgentExecution();
 						break;
@@ -82,47 +98,61 @@ class AIChatViewProvider implements vscode.WebviewViewProvider {
 					case 'closePlugin':
 						this.closePlugin();
 						break;
+                    case 'continueAgent':
+                        await this.continueAgentTask();
+                        break;
 					case 'runCommandInTerminal':
 						this.runCommandInTerminal(String(data.commandText || ''), typeof data.workingDirectory === 'string' ? data.workingDirectory : undefined);
+						break;
+					case 'toolCallsCompleted':
+						if (this._view && this._pendingAssistantMessage) {
+							this._view.webview.postMessage({
+								command: 'addMessage',
+								content: this._pendingAssistantMessage,
+								type: 'assistant'
+							});
+						}
+						this._pendingAssistantMessage = undefined;
+						this._pendingToolCalls = undefined;
 						break;
 				}
 			}
 		);
 	}
 
-	private async handleAIMessage(message: string, model: string) {
-		try {
-			// 显示正在思考的状态
-			if (this._view) {
-				this._view.webview.postMessage({ command: 'showTyping', isTyping: true });
-			}
+    private async handleAIMessage(message: string, model: string) {
+        try {
+            // 显示正在思考的状态
+            if (this._view) {
+                this._view.webview.postMessage({ command: 'showTyping', isTyping: true });
+            }
 
-			let aiResponse: string | undefined;
+            let aiResponse: string | undefined;
 
-			if (this.useAgentMode && this.traeAgent.isTraeAgentAvailableSync()) {
-				// 使用 Trae-Agent 模式（暂未流式化）
-				aiResponse = await this.handleAgentMessage(message);
-			} else {
-				// 使用 DashScope 兼容 OpenAI 的流式接口返回
-				if (this._view) {
-					this._view.webview.postMessage({ command: 'startAssistantMessage' });
-				}
+            if (this.useAgentMode && this.traeAgent.isTraeAgentAvailableSync()) {
+                // 使用 Trae-Agent 模式（改为流式到聊天气泡）
+                await this.handleAgentMessage(message);
+            } else {
+                // 使用 DashScope 兼容 OpenAI 的流式接口返回
+                if (this._view) {
+                    this._view.webview.postMessage({ command: 'startAssistantMessage' });
+                }
 				console.log('[NEXAIDE][Stream] startAssistantMessage sent (normal mode)');
 				await this.callQwenAPIStream(message, model);
 			}
 
-			// 非流式（Agent 模式）返回后追加消息并关闭打字状态
-			if (aiResponse !== undefined && this._view) {
-				this._view.webview.postMessage({ command: 'showTyping', isTyping: false });
-				this._view.webview.postMessage({ command: 'addMessage', content: aiResponse, type: 'assistant' });
-			}
-		} catch (error) {
-			if (this._view) {
-				this._view.webview.postMessage({ command: 'showTyping', isTyping: false });
-				this._view.webview.postMessage({ command: 'addMessage', content: `❌ 获取AI响应失败: ${error instanceof Error ? error.message : '未知错误'}，请重试。`, type: 'system' });
-			}
-		}
-	}
+            // 非流式（普通模式）在此关闭打字状态；Agent 模式在其内部完成
+            if (aiResponse !== undefined && aiResponse.trim().length > 0 && this._view) {
+                this._view.webview.postMessage({ command: 'showTyping', isTyping: false });
+                this._view.webview.postMessage({ command: 'addMessage', content: aiResponse, type: 'assistant' });
+            }
+        } catch (error) {
+            if (this._view) {
+                this._view.webview.postMessage({ command: 'showTyping', isTyping: false });
+                this._view.webview.postMessage({ command: 'addMessage', content: `❌ 获取AI响应失败: ${error instanceof Error ? error.message : '未知错误'}，请重试。`, type: 'system' });
+            }
+        }
+    }
 
 	private async callQwenAPIStream(message: string, model: string = 'qwen-max'): Promise<void> {
 		return new Promise((resolve, reject) => {
@@ -399,43 +429,47 @@ class AIChatViewProvider implements vscode.WebviewViewProvider {
 	/**
 	 * 处理 Agent 模式的消息
 	 */
-	private async handleAgentMessage(message: string): Promise<string> {
-		try {
-			// 显示 Agent 执行状态
-			if (this._view) {
-				this._view.webview.postMessage({
-					command: 'agentProgress',
-					status: 'executing',
-					progress: '🤖 Agent 正在执行...'
-				});
-			}
+    private async handleAgentMessage(message: string): Promise<void> {
+        try {
+            // 显示 Agent 执行状态
+            if (this._view) {
+                this._view.webview.postMessage({
+                    command: 'agentProgress',
+                    status: 'executing',
+                    progress: '🤖 Agent 正在执行...'
+                });
+                // 开启助手消息气泡，准备流式追加
+                this._view.webview.postMessage({ command: 'startAssistantMessage' });
+            }
 
 			// 更健壮的工作目录解析：活动编辑器所在工作区 -> 第一个工作区 -> 让用户选择
 			let workingDirectory = vscode.window.activeTextEditor ? vscode.workspace.getWorkspaceFolder(vscode.window.activeTextEditor.document.uri)?.uri.fsPath : undefined;
 			if (!workingDirectory) {
 				workingDirectory = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 			}
-			if (!workingDirectory) {
-				const picked = await vscode.window.showOpenDialog({
-					canSelectFiles: false,
-					canSelectFolders: true,
-					canSelectMany: false,
-					openLabel: '选择工作目录'
-				});
-				workingDirectory = picked && picked.length > 0 ? picked[0].fsPath : undefined;
-			}
-			if (!workingDirectory) {
-				if (this._view) {
-					this._view.webview.postMessage({
-						command: 'agentProgress',
-						status: 'error'
-					});
-				}
-				vscode.window.showWarningMessage('未检测到工作目录。请在 VS Code 中打开项目或选择一个文件夹后重试。');
-				return '❌ **Agent 执行失败:**\n\n未检测到工作目录。请在 VS Code 中打开项目或选择一个文件夹后重试。';
-			}
+            if (!workingDirectory) {
+                const picked = await vscode.window.showOpenDialog({
+                    canSelectFiles: false,
+                    canSelectFolders: true,
+                    canSelectMany: false,
+                    openLabel: '选择工作目录'
+                });
+                workingDirectory = picked && picked.length > 0 ? picked[0].fsPath : undefined;
+            }
+            if (!workingDirectory) {
+                if (this._view) {
+                    this._view.webview.postMessage({
+                        command: 'agentProgress',
+                        status: 'error'
+                    });
+                }
+                vscode.window.showWarningMessage('未检测到工作目录。请在 VS Code 中打开项目或选择一个文件夹后重试。');
+                this._view?.webview.postMessage({ command: 'finishAssistantMessage' });
+                return;
+            }
+            this.lastWorkingDirectory = workingDirectory;
 
-            const result: TraeAgentResponse = await this.traeAgent.executeAgent(message, {
+            const result: TraeAgentResponse = await this.traeAgent.executeAgentInteractive(message, {
                 timeout: 120000, // 2分钟超时
                 workingDirectory,
                 onProgress: (data: string) => {
@@ -446,6 +480,8 @@ class AIChatViewProvider implements vscode.WebviewViewProvider {
                             status: 'executing',
                             progress: data
                         });
+                        // 同步将原始输出追加到助手气泡
+                        this._view.webview.postMessage({ command: 'appendAssistantChunk', content: data });
                     }
                 }
             });
@@ -470,70 +506,165 @@ class AIChatViewProvider implements vscode.WebviewViewProvider {
                     command: 'agentProgress',
                     status: 'completed'
                 });
+                // 结束消息流（若前面有进度输出）
+                this._view.webview.postMessage({ command: 'finishAssistantMessage' });
             }
 
-			if (result.success) {
-				// 如果有工具调用，显示工具调用信息
-				if (result.toolCalls && result.toolCalls.length > 0) {
-					if (this._view) {
-						this._view.webview.postMessage({
-							command: 'showToolCalls',
-							toolCalls: result.toolCalls
-						});
-					}
-				}
-				return `🤖 **Agent 响应:**\n\n${result.content}`;
-			} else {
-				return `❌ **Agent 执行失败:**\n\n${result.error || '未知错误'}\n\n*已自动切换到普通模式，您可以继续对话。*`;
-			}
-		} catch (error) {
-			// 隐藏执行状态
-			if (this._view) {
-				this._view.webview.postMessage({
-					command: 'agentProgress',
-					status: 'error'
-				});
-			}
-			return `❌ **Agent 执行异常:**\n\n${error instanceof Error ? error.message : '未知错误'}\n\n*已自动切换到普通模式，您可以继续对话。*`;
-		}
-	}
+            if (result.success) {
+                // 如果有工具调用，先展示工具卡片并阻塞最终消息，待前端确认后再发送
+                if (result.toolCalls && result.toolCalls.length > 0) {
+                    this._pendingAssistantMessage = `🤖 **Agent 响应:**\n\n${result.content}`;
+                    this._pendingToolCalls = result.toolCalls;
+                    if (this._view) {
+                        this._view.webview.postMessage({ command: 'showTyping', isTyping: false });
+                        this._view.webview.postMessage({
+                            command: 'showToolCalls',
+                            toolCalls: result.toolCalls
+                        });
+                        this._view.webview.postMessage({
+                            command: 'addMessage',
+                            content: '🧭 已生成执行步骤。请按卡片中的“在终端运行”，完成后点击“完成并继续”，我会继续回复。',
+                            type: 'system'
+                        });
+                    }
+                    return;
+                }
+                // 无工具调用时，直接把最终内容作为系统消息补充（气泡已完成）
+                if (this._view) {
+                    this._view.webview.postMessage({
+                        command: 'addMessage',
+                        content: `🤖 **Agent 响应:**\n\n${result.content}`,
+                        type: 'assistant'
+                    });
+                }
+                return;
+            } else {
+                if (this._view) {
+                    this._view.webview.postMessage({
+                        command: 'addMessage',
+                        content: `❌ **Agent 执行失败:**\n\n${result.error || '未知错误'}\n\n*已自动切换到普通模式，您可以继续对话。*`,
+                        type: 'assistant'
+                    });
+                }
+                return;
+            }
+        } catch (error) {
+            // 隐藏执行状态
+            if (this._view) {
+                this._view.webview.postMessage({
+                    command: 'agentProgress',
+                    status: 'error'
+                });
+            }
+            this._view?.webview.postMessage({
+                command: 'addMessage',
+                content: `❌ **Agent 执行异常:**\n\n${error instanceof Error ? error.message : '未知错误'}\n\n*已自动切换到普通模式，您可以继续对话。*`,
+                type: 'assistant'
+            });
+            this._view?.webview.postMessage({ command: 'finishAssistantMessage' });
+            return;
+        }
+    }
+
+    /**
+     * 继续当前交互会话，输入新的任务，并将输出流式到气泡
+     */
+    private async continueAgentTask(): Promise<void> {
+        const newTask = await vscode.window.showInputBox({
+            prompt: '继续任务：请输入新的指令',
+            placeHolder: '例如：在设置页面添加暗色模式开关',
+            validateInput: (v) => v && v.trim().length > 0 ? undefined : '请输入内容'
+        });
+        if (!newTask) { return; }
+
+        if (!this.traeAgent || !this.traeAgent.isTraeAgentAvailableSync()) {
+            vscode.window.showWarningMessage('Trae-Agent 不可用，无法继续任务。');
+            return;
+        }
+
+        // 开启气泡与进度
+        this._view?.webview.postMessage({ command: 'startAssistantMessage' });
+        this._view?.webview.postMessage({ command: 'agentProgress', status: 'executing', progress: '🤖 Agent 正在继续任务...' });
+
+        const lines = [newTask];
+        // 可选：再次指定工作目录（若用户之前选择过）
+        if (this.lastWorkingDirectory) {
+            lines.push(this.lastWorkingDirectory);
+        }
+
+        const result = await this.traeAgent.sendInteractiveInput(lines, (data: string) => {
+            this._view?.webview.postMessage({ command: 'appendAssistantChunk', content: data });
+            this._view?.webview.postMessage({ command: 'agentProgress', status: 'executing', progress: data });
+        });
+
+        // 完成与展示工具调用/结果
+        this._view?.webview.postMessage({ command: 'finishAssistantMessage' });
+        this._view?.webview.postMessage({ command: 'agentProgress', status: 'completed' });
+
+        if (result.success) {
+            if (result.toolCalls && result.toolCalls.length > 0) {
+                this._pendingAssistantMessage = `🤖 **Agent 响应:**\n\n${result.content}`;
+                this._pendingToolCalls = result.toolCalls;
+                this._view?.webview.postMessage({ command: 'showToolCalls', toolCalls: result.toolCalls });
+                this._view?.webview.postMessage({
+                    command: 'addMessage',
+                    content: '🧭 已生成执行步骤。请按卡片中的“在终端运行”，完成后点击“完成并继续”，我会继续回复。',
+                    type: 'system'
+                });
+            } else {
+                this._view?.webview.postMessage({ command: 'addMessage', content: `🤖 **Agent 响应:**\n\n${result.content}`, type: 'assistant' });
+            }
+        } else {
+            this._view?.webview.postMessage({ command: 'addMessage', content: `❌ **Agent 继续任务失败:**\n\n${result.error || '未知错误'}`, type: 'assistant' });
+        }
+    }
 
 	/**
 	 * 切换 Agent 模式
 	 */
 	private async toggleAgentMode(): Promise<void> {
-		this.useAgentMode = !this.useAgentMode;
-		
+		const targetMode = !this.useAgentMode;
 		// 等待初始化完成后检查可用性
 		const isAvailable = await this.traeAgent.isTraeAgentAvailable();
-		
+
+		if (targetMode && !isAvailable) {
+			// 目标是打开 Agent，但不可用：保持普通模式并提示
+			this.useAgentMode = false;
+			if (this._view) {
+				this._view.webview.postMessage({
+					command: 'agentModeToggled',
+					enabled: false,
+					available: false
+				});
+				this._view.webview.postMessage({
+					command: 'addMessage',
+					content: `⚠️ **模式切换:** Trae-Agent 不可用，已保持到普通模式`,
+					type: 'system'
+				});
+			}
+			vscode.window.showWarningMessage('Trae-Agent 不可用，请检查安装配置。已切换到普通模式。');
+			return;
+		}
+
+		// 可用性满足或者目标是关闭 Agent：应用切换
+		this.useAgentMode = targetMode;
+		const modeText = this.useAgentMode ? 'Agent 模式' : '普通聊天模式';
+		const statusIcon = this.useAgentMode ? '🤖' : '💬';
+
 		if (this._view) {
 			this._view.webview.postMessage({
 				command: 'agentModeToggled',
 				enabled: this.useAgentMode,
 				available: isAvailable
 			});
-		}
-
-		const modeText = this.useAgentMode ? 'Agent 模式' : '普通聊天模式';
-		const statusIcon = this.useAgentMode ? '🤖' : '💬';
-		
-		if (this.useAgentMode && !isAvailable) {
-			vscode.window.showWarningMessage('Trae-Agent 不可用，请检查安装配置。已切换到普通模式。');
-			this.useAgentMode = false;
-			return;
-		}
-
-		vscode.window.showInformationMessage(`${statusIcon} 已切换到${modeText}`);
-		
-		// 在聊天中显示模式切换消息
-		if (this._view) {
 			this._view.webview.postMessage({
 				command: 'addMessage',
 				content: `${statusIcon} **模式切换:** 已切换到 ${modeText}`,
 				type: 'system'
 			});
 		}
+
+		vscode.window.showInformationMessage(`${statusIcon} 已切换到${modeText}`);
 	}
 
 	/**
