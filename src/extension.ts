@@ -12,6 +12,7 @@ class AIChatViewProvider implements vscode.WebviewViewProvider {
 	private _view?: vscode.WebviewView;
 	private traeAgent: TraeAgentService;
 	private useAgentMode: boolean = false;
+	private terminal: vscode.Terminal | undefined;
 	
 	constructor(private readonly _extensionUri: vscode.Uri) {
 		this.traeAgent = new TraeAgentService(_extensionUri.fsPath);
@@ -81,6 +82,9 @@ class AIChatViewProvider implements vscode.WebviewViewProvider {
 					case 'closePlugin':
 						this.closePlugin();
 						break;
+					case 'runCommandInTerminal':
+						this.runCommandInTerminal(String(data.commandText || ''), typeof data.workingDirectory === 'string' ? data.workingDirectory : undefined);
+						break;
 				}
 			}
 		);
@@ -90,71 +94,181 @@ class AIChatViewProvider implements vscode.WebviewViewProvider {
 		try {
 			// 显示正在思考的状态
 			if (this._view) {
-				this._view.webview.postMessage({
-					command: 'showTyping',
-					isTyping: true
-				});
+				this._view.webview.postMessage({ command: 'showTyping', isTyping: true });
 			}
 
-			let aiResponse: string;
-			
+			let aiResponse: string | undefined;
+
 			if (this.useAgentMode && this.traeAgent.isTraeAgentAvailableSync()) {
-				// 使用 Trae-Agent 模式
+				// 使用 Trae-Agent 模式（暂未流式化）
 				aiResponse = await this.handleAgentMessage(message);
 			} else {
-				// 使用原有的通义千问 API
-				aiResponse = await this.callQwenAPI(message, model);
+				// 使用 DashScope 兼容 OpenAI 的流式接口返回
+				if (this._view) {
+					this._view.webview.postMessage({ command: 'startAssistantMessage' });
+				}
+				console.log('[NEXAIDE][Stream] startAssistantMessage sent (normal mode)');
+				await this.callQwenAPIStream(message, model);
 			}
-			
-			if (this._view) {
-				this._view.webview.postMessage({
-					command: 'showTyping',
-					isTyping: false
-				});
-				this._view.webview.postMessage({
-					command: 'addMessage',
-					content: aiResponse,
-					type: 'assistant'
-				});
+
+			// 非流式（Agent 模式）返回后追加消息并关闭打字状态
+			if (aiResponse !== undefined && this._view) {
+				this._view.webview.postMessage({ command: 'showTyping', isTyping: false });
+				this._view.webview.postMessage({ command: 'addMessage', content: aiResponse, type: 'assistant' });
 			}
 		} catch (error) {
 			if (this._view) {
-				this._view.webview.postMessage({
-					command: 'showTyping',
-					isTyping: false
-				});
-				this._view.webview.postMessage({
-					command: 'addMessage',
-					content: `❌ 获取AI响应失败: ${error instanceof Error ? error.message : '未知错误'}，请重试。`,
-					type: 'system'
-				});
+				this._view.webview.postMessage({ command: 'showTyping', isTyping: false });
+				this._view.webview.postMessage({ command: 'addMessage', content: `❌ 获取AI响应失败: ${error instanceof Error ? error.message : '未知错误'}，请重试。`, type: 'system' });
 			}
 		}
 	}
 
+	private async callQwenAPIStream(message: string, model: string = 'qwen-max'): Promise<void> {
+		return new Promise((resolve, reject) => {
+			const apiKey = process.env.DASHSCOPE_API_KEY || process.env.OPENAI_API_KEY || '';
+			if (!apiKey) {
+				if (this._view) {
+					this._view.webview.postMessage({
+						command: 'addMessage',
+						content: '⚠️ 未配置 DashScope API Key。请在系统环境变量 DASHSCOPE_API_KEY 或 OPENAI_API_KEY 中设置后重试。',
+						type: 'system'
+					});
+					this._view.webview.postMessage({ command: 'showTyping', isTyping: false });
+				}
+				return reject(new Error('Missing API key'));
+			}
+
+			const payload = {
+				model,
+				messages: [
+					{ role: 'system', content: '你是NEXAIDE AI编程助手，专门帮助开发者进行代码开发、调试和优化。请用简洁、专业的方式回答问题，并在适当时提供代码示例。' },
+					{ role: 'user', content: message }
+				],
+				stream: true,
+				temperature: 1,
+				max_tokens: 8192
+			};
+
+			const postData = JSON.stringify(payload);
+			const options = {
+				hostname: 'dashscope.aliyuncs.com',
+				port: 443,
+				path: '/compatible-mode/v1/chat/completions',
+				method: 'POST',
+				headers: {
+					'Authorization': `Bearer ${apiKey}`,
+					'Content-Type': 'application/json',
+					'Accept': 'text/event-stream',
+					'Content-Length': Buffer.byteLength(postData)
+				},
+				timeout: 60000
+			};
+
+			const req = https.request(options, (res) => {
+				if (res.statusCode && res.statusCode !== 200) {
+					let errData = '';
+					res.on('data', chunk => errData += chunk);
+					res.on('end', () => {
+						const msg = errData || `HTTP ${res.statusCode}`;
+						console.error('[NEXAIDE][Stream] API error response:', msg);
+						reject(new Error(`API请求失败: ${msg}`));
+						if (this._view) {
+							this._view.webview.postMessage({ command: 'showTyping', isTyping: false });
+							this._view.webview.postMessage({ command: 'addMessage', content: `❌ API错误: ${msg}`, type: 'system' });
+						}
+					});
+					return;
+				}
+
+				let buffer = '';
+				let started = false;
+
+				res.on('data', (chunk) => {
+					const str = chunk.toString('utf8');
+					buffer += str;
+					const parts = buffer.split('\n');
+					buffer = parts.pop() || '';
+					for (const line of parts) {
+						const trimmed = line.trim();
+						if (!trimmed) { continue; }
+						if (trimmed.startsWith('data:')) {
+							const dataStr = trimmed.substring(5).trim();
+							if (dataStr === '[DONE]') {
+								console.log('[NEXAIDE][Stream] Received [DONE]');
+								// 完成
+								if (this._view) {
+									this._view.webview.postMessage({ command: 'finishAssistantMessage' });
+								}
+								return resolve();
+							}
+							try {
+								const json = JSON.parse(dataStr);
+								const delta = json?.choices?.[0]?.delta?.content ?? json?.choices?.[0]?.message?.content ?? '';
+								if (delta) {
+									started = true;
+									console.log(`[NEXAIDE][Stream] Append chunk, length=${delta.length}`);
+									if (this._view) {
+										this._view.webview.postMessage({ command: 'appendAssistantChunk', content: delta });
+									}
+								}
+							} catch (e) {
+								// 忽略解析错误，继续读取
+							}
+						}
+					}
+				});
+
+				res.on('end', () => {
+					console.log('[NEXAIDE][Stream] Response ended');
+					// 若未显式收到 [DONE]，也结束
+					if (this._view) {
+						this._view.webview.postMessage({ command: 'finishAssistantMessage' });
+					}
+					resolve();
+				});
+			});
+
+			req.on('error', (error) => {
+				if (this._view) {
+					this._view.webview.postMessage({ command: 'showTyping', isTyping: false });
+					this._view.webview.postMessage({ command: 'addMessage', content: `网络请求失败: ${error.message}`, type: 'system' });
+				}
+				reject(new Error(`网络请求失败: ${error.message}`));
+			});
+
+			req.on('timeout', () => {
+				req.destroy();
+				if (this._view) {
+					this._view.webview.postMessage({ command: 'showTyping', isTyping: false });
+					this._view.webview.postMessage({ command: 'addMessage', content: '请求超时，请重试', type: 'system' });
+				}
+				reject(new Error('请求超时，请重试'));
+			});
+
+			req.write(postData);
+			req.end();
+		});
+	}
+
 	private async callQwenAPI(message: string, model: string = 'qwen-max'): Promise<string> {
 		return new Promise((resolve, reject) => {
-			const apiKey = 'sk-32800d6692f346d4a17b6d8116964b53';
-			const url = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions';
-			
+			const apiKey = process.env.DASHSCOPE_API_KEY || process.env.OPENAI_API_KEY || '';
+			if (!apiKey) {
+				return reject(new Error('Missing API key'));
+			}
+
 			const payload = {
 				model: model,
 				messages: [
-					{
-						role: 'system',
-						content: '你是NEXAIDE AI编程助手，专门帮助开发者进行代码开发、调试和优化。请用简洁、专业的方式回答问题，并在适当时提供代码示例。'
-					},
-					{
-						role: 'user',
-						content: message
-					}
+					{ role: 'system', content: '你是NEXAIDE AI编程助手，专门帮助开发者进行代码开发、调试和优化。请用简洁、专业的方式回答问题，并在适当时提供代码示例。' },
+					{ role: 'user', content: message }
 				],
 				temperature: 1,
 				max_tokens: 8192
 			};
 
 			const postData = JSON.stringify(payload);
-			
 			const options = {
 				hostname: 'dashscope.aliyuncs.com',
 				port: 443,
@@ -170,11 +284,7 @@ class AIChatViewProvider implements vscode.WebviewViewProvider {
 
 			const req = https.request(options, (res) => {
 				let data = '';
-				
-				res.on('data', (chunk) => {
-					data += chunk;
-				});
-				
+				res.on('data', (chunk) => { data += chunk; });
 				res.on('end', () => {
 					try {
 						const result = JSON.parse(data);
@@ -325,28 +435,42 @@ class AIChatViewProvider implements vscode.WebviewViewProvider {
 				return '❌ **Agent 执行失败:**\n\n未检测到工作目录。请在 VS Code 中打开项目或选择一个文件夹后重试。';
 			}
 
-			const result: TraeAgentResponse = await this.traeAgent.executeAgent(message, {
-				timeout: 120000, // 2分钟超时
-				workingDirectory,
-				onProgress: (data: string) => {
-					// 实时显示执行进度
-					if (this._view) {
-						this._view.webview.postMessage({
-							command: 'agentProgress',
-							status: 'executing',
-							progress: data
-						});
-					}
-				}
-			});
+            const result: TraeAgentResponse = await this.traeAgent.executeAgent(message, {
+                timeout: 120000, // 2分钟超时
+                workingDirectory,
+                onProgress: (data: string) => {
+                    // 实时显示执行进度
+                    if (this._view) {
+                        this._view.webview.postMessage({
+                            command: 'agentProgress',
+                            status: 'executing',
+                            progress: data
+                        });
+                    }
+                }
+            });
 
-			// 隐藏执行状态
-			if (this._view) {
-				this._view.webview.postMessage({
-					command: 'agentProgress',
-					status: 'completed'
-				});
-			}
+            // 显示执行模式与运行环境说明
+            if (this._view) {
+                const modeText = result.mode === 'mcp' ? 'MCP' : (result.mode === 'cli' ? 'CLI' : '未知');
+                const info = `🛠 执行模式: ${modeText}\n` +
+                    `📂 工作目录: \`${workingDirectory}\`\n\n` +
+                    `- Agent 内部执行：在后台子进程中运行（不可见终端）\n` +
+                    `- “在终端运行”按钮：在 VS Code 集成终端运行（遵循你的终端配置）`;
+                this._view.webview.postMessage({
+                    command: 'addMessage',
+                    content: info,
+                    type: 'system'
+                });
+            }
+
+            // 隐藏执行状态
+            if (this._view) {
+                this._view.webview.postMessage({
+                    command: 'agentProgress',
+                    status: 'completed'
+                });
+            }
 
 			if (result.success) {
 				// 如果有工具调用，显示工具调用信息
@@ -485,6 +609,63 @@ class AIChatViewProvider implements vscode.WebviewViewProvider {
 		
 		return html;
 	}
+
+	private runCommandInTerminal(command: string, workingDirectory?: string): void {
+		try {
+			if (!command || command.trim().length === 0) {
+				vscode.window.showWarningMessage('无效的命令，无法在终端执行。');
+				return;
+			}
+			// 选择 Shell（参考 VS Code terminal.integrated.defaultProfile.windows）
+			const integratedConfig = vscode.workspace.getConfiguration('terminal.integrated');
+			const defaultProfile = (integratedConfig.get<string>('defaultProfile.windows') || '').toLowerCase();
+			let shellType: 'powershell' | 'cmd' | 'bash' = 'powershell';
+			let shellPath: string = 'powershell.exe';
+			if (defaultProfile.includes('cmd') || defaultProfile.includes('command prompt')) {
+				shellType = 'cmd';
+				shellPath = process.env.ComSpec || 'C\\\\Windows\\\\System32\\\\cmd.exe';
+			} else if (defaultProfile.includes('bash')) {
+				shellType = 'bash';
+				shellPath = 'C\\\\Program Files\\\\Git\\\\bin\\\\bash.exe';
+			} else {
+				shellType = 'powershell';
+				shellPath = 'powershell.exe';
+			}
+			// 复用或创建终端
+			if (!this.terminal) {
+				this.terminal = vscode.window.createTerminal({ name: 'NEXAIDE Terminal', shellPath });
+			}
+			this.terminal.show(true);
+			// 轻风险提示（不强制确认，参考 Trae）
+			const normalizedCmd = command.toLowerCase();
+			if (/(rm\s+-rf|rmdir\s+|del\s+|format\s+|mkfs|shutdown|reboot|poweroff|dd\s+|diskpart|bcdedit|reg\s+delete|sc\s+delete|net\s+user\s+.*\/delete)/.test(normalizedCmd)) {
+				vscode.window.showWarningMessage('⚠️ 检测到可能高风险命令：请确认工作目录与命令是否正确。');
+			}
+			// Windows UTF-8 保护 / Shell 适配
+			if (shellType === 'powershell') {
+				this.terminal.sendText("$env:PYTHONIOENCODING='utf-8'; $env:PYTHONUTF8='1'", true);
+			} else if (shellType === 'cmd') {
+				this.terminal.sendText('set PYTHONIOENCODING=utf-8 & set PYTHONUTF8=1', true);
+			} else { // bash
+				this.terminal.sendText('export PYTHONIOENCODING=utf-8; export PYTHONUTF8=1', true);
+			}
+			// 工作目录切换
+			if (workingDirectory && workingDirectory.trim().length > 0) {
+				const wd = workingDirectory.replace(/"/g, '\\"');
+				if (shellType === 'powershell') {
+					this.terminal.sendText(`Set-Location -Path "${wd}"`, true);
+				} else if (shellType === 'cmd') {
+					this.terminal.sendText(`cd /d "${wd}"`, true);
+				} else {
+					this.terminal.sendText(`cd "${wd}"`, true);
+				}
+			}
+			// 发送命令
+			this.terminal.sendText(command, true);
+		} catch (e) {
+			vscode.window.showErrorMessage(`在终端运行命令失败: ${e instanceof Error ? e.message : String(e)}`);
+		}
+	}
 }
 
 // This method is called when your extension is activated
@@ -524,3 +705,5 @@ export function activate(context: vscode.ExtensionContext) {
 
 // This method is called when your extension is deactivated
 export function deactivate() {}
+
+// runCommandInTerminal 已移入 AIChatViewProvider 类内，避免 this 未定义导致的编译错误。

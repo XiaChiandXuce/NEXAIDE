@@ -503,6 +503,58 @@
             border-radius: 2px;
             font-family: var(--vscode-editor-font-family);
         }
+
+        /* 命令卡片样式（参考 Trae） */
+        .command-card {
+            border: 1px solid var(--vscode-panel-border);
+            border-radius: 8px;
+            padding: 12px;
+            margin: 8px 0;
+            background-color: var(--vscode-editor-background);
+        }
+        .command-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+        .command-body {
+            background-color: var(--vscode-textCodeBlock-background);
+            padding: 8px;
+            border-radius: 6px;
+            overflow-x: auto;
+            margin: 6px 0;
+        }
+        .command-wd {
+            font-size: 12px;
+            color: var(--vscode-descriptionForeground);
+            margin: 6px 0;
+        }
+        .command-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 6px;
+        }
+        .cmd-btn {
+            background: var(--vscode-button-secondaryBackground);
+            color: var(--vscode-button-secondaryForeground);
+            border: 1px solid var(--vscode-button-border);
+            border-radius: 4px;
+            padding: 4px 10px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .cmd-btn:hover {
+            background: var(--vscode-button-secondaryHoverBackground);
+        }
+        .cmd-btn.run {
+            background: var(--vscode-button-background);
+            color: var(--vscode-button-foreground);
+        }
+        .cmd-btn.run:hover {
+            background: var(--vscode-button-hoverBackground);
+        }
     </style>
 </head>
 <body>
@@ -948,6 +1000,65 @@
                     hideTypingIndicator();
                     addMessage(`Error: ${message.content}`, 'system');
                     break;
+                // 新增：流式输出处理
+                case 'startAssistantMessage': {
+                    console.log('[NEXAIDE][Webview] startAssistantMessage received');
+                    hideTypingIndicator();
+                    const messageDiv = document.createElement('div');
+                    messageDiv.className = 'message assistant';
+                    const metaDiv = document.createElement('div');
+                    metaDiv.className = 'message-meta';
+                    const avatarDiv = document.createElement('div');
+                    avatarDiv.className = 'message-avatar';
+                    avatarDiv.textContent = '🤖';
+                    const nameSpan = document.createElement('span');
+                    nameSpan.textContent = 'AI 助手';
+                    const timeSpan = document.createElement('span');
+                    timeSpan.textContent = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+                    metaDiv.appendChild(avatarDiv);
+                    metaDiv.appendChild(nameSpan);
+                    metaDiv.appendChild(timeSpan);
+                    messageDiv.appendChild(metaDiv);
+                    const contentDiv = document.createElement('div');
+                    contentDiv.className = 'message-content';
+                    contentDiv.dataset.isStreaming = 'true';
+                    contentDiv.dataset.streamBuffer = '';
+                    contentDiv.textContent = '';
+                    messageDiv.appendChild(contentDiv);
+                    chatMessages.appendChild(messageDiv);
+                    chatMessages.scrollTop = chatMessages.scrollHeight;
+                    window._nexaideStreamTarget = contentDiv;
+                    console.log('[NEXAIDE][Webview] stream target initialized');
+                    break;
+                }
+                case 'appendAssistantChunk': {
+                    const target = window._nexaideStreamTarget;
+                    if (target) {
+                        const chunk = message.content || '';
+                        console.log(`[NEXAIDE][Webview] appendAssistantChunk length=${chunk.length}`);
+                        // 累积原始文本并直接追加，避免每次重建 innerHTML 导致卡顿
+                        target.dataset.streamBuffer = (target.dataset.streamBuffer || '') + chunk;
+                        target.textContent += chunk;
+                        chatMessages.scrollTop = chatMessages.scrollHeight;
+                        // 不在每个增量片段都保存状态，避免阻塞渲染；在 finish 时统一保存
+                    }
+                    break;
+                }
+                case 'finishAssistantMessage': {
+                    console.log('[NEXAIDE][Webview] finishAssistantMessage received');
+                    const target = window._nexaideStreamTarget;
+                    if (target) {
+                        const buffer = (target.dataset && target.dataset.streamBuffer) ? target.dataset.streamBuffer : target.textContent;
+                        // 结束时一次性进行格式化，避免流式过程中频繁 innerHTML 重排
+                        target.innerHTML = formatCodeBlocks(buffer);
+                        delete target.dataset.isStreaming;
+                        delete target.dataset.streamBuffer;
+                        delete window._nexaideStreamTarget;
+                    }
+                    hideTypingIndicator();
+                    saveState();
+                    break;
+                }
                 // 新增：处理扩展端发来的 showAgentStatus 指令，避免未识别消息导致状态未更新
                 case 'showAgentStatus':
                     if (message.status === 'stopped') {
@@ -985,20 +1096,59 @@
                 // 新增：展示工具调用详情，兼容扩展端发送的 showToolCalls
                 case 'showToolCalls':
                     if (Array.isArray(message.toolCalls) && message.toolCalls.length > 0) {
-                        const toolCallsHtml = message.toolCalls.map(tc => {
-                            try {
-                                const name = tc.name || '未知工具';
-                                const params = (tc.parameters !== undefined ? tc.parameters : (tc.arguments !== undefined ? tc.arguments : {}));
-                                const args = typeof params === 'string' ? params : JSON.stringify(params, null, 2);
-                                const result = tc.result !== undefined && tc.result !== null ? String(tc.result) : '';
-                                return `<div class="tool-call"><strong>${name}</strong>${result ? `<div class=\"tool-result\">结果: ${result}</div>` : ''}<pre><code>${args}</code></pre></div>`;
-                            } catch (e) {
-                                return `<div class="tool-call">工具调用解析失败</div>`;
-                            }
-                        }).join('');
                         const container = document.createElement('div');
                         container.className = 'tool-calls';
-                        container.innerHTML = `<div><strong>🔧 工具调用</strong></div>${toolCallsHtml}`;
+                        const cards = message.toolCalls.map(tc => {
+                            const name = tc.name || '未知工具';
+                            const params = (tc.parameters !== undefined ? tc.parameters : (tc.arguments !== undefined ? tc.arguments : {}));
+                            let commandText = '';
+                            let workingDirectory = '';
+                            if (name === 'bash') {
+                                if (typeof params === 'string') {
+                                    commandText = params;
+                                } else if (params && typeof params === 'object') {
+                                    commandText = String(params.command || params.cmd || '');
+                                    workingDirectory = String(params.path || params.cwd || params.working_dir || '');
+                                }
+                            }
+                            const safeCommand = commandText || '';
+                            const card = document.createElement('div');
+                            card.className = 'command-card';
+                            card.innerHTML = `
+                                <div class="command-header">
+                                    <span class="tool-name">🔧 ${name}</span>
+                                </div>
+                                <pre class="command-body"><code>${safeCommand}</code></pre>
+                                ${workingDirectory ? `<div class="command-wd">📂 工作目录: <code>${workingDirectory}</code></div>` : ''}
+                                <div class="command-actions">
+                                    <button class="cmd-btn copy">复制</button>
+                                    <button class="cmd-btn run">在终端运行</button>
+                                </div>
+                            `;
+                            const copyBtn = card.querySelector('.cmd-btn.copy');
+                            const runBtn = card.querySelector('.cmd-btn.run');
+                            copyBtn?.addEventListener('click', () => {
+                                navigator.clipboard.writeText(safeCommand).then(() => {
+                                    showMessage('✅ 已复制命令到剪贴板', 'success');
+                                }).catch(() => showMessage('❌ 复制失败', 'error'));
+                            });
+                            runBtn?.addEventListener('click', () => {
+                                if (!safeCommand) {
+                                    showMessage('⚠️ 无可执行命令', 'warning');
+                                    return;
+                                }
+                                vscode.postMessage({
+                                    command: 'runCommandInTerminal',
+                                    commandText: safeCommand,
+                                    workingDirectory: workingDirectory || undefined
+                                });
+                            });
+                            return card;
+                        });
+                        const title = document.createElement('div');
+                        title.innerHTML = '<div><strong>🔧 工具调用（参考 Trae 命令卡片）</strong></div>';
+                        container.appendChild(title);
+                        cards.forEach(c => container.appendChild(c));
                         chatMessages.appendChild(container);
                         chatMessages.scrollTop = chatMessages.scrollHeight;
                         saveState();

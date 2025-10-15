@@ -10,6 +10,8 @@ export interface TraeAgentResponse {
     content: string;
     error?: string;
     toolCalls?: ToolCall[];
+    // 执行模式标识：MCP 或 CLI
+    mode?: 'mcp' | 'cli';
 }
 
 export interface ToolCall {
@@ -215,7 +217,7 @@ export class TraeAgentService {
                     }
                 }
                 if (text) {
-                    return { success: true, content: text };
+                    return { success: true, content: text, mode: 'mcp' };
                 }
             }
         } catch (e) {
@@ -324,12 +326,14 @@ export class TraeAgentService {
                             success,
                             content: finalContent,
                             toolCalls,
+                            mode: 'cli',
                         });
                     } else {
                         resolve({
                             success: false,
                             content: finalContent,
-                            error: errorOutput.trim() || `Process exited with code ${code}`
+                            error: errorOutput.trim() || `Process exited with code ${code}`,
+                            mode: 'cli',
                         });
                     }
                 }
@@ -347,7 +351,8 @@ export class TraeAgentService {
                     resolve({
                         success: false,
                         content: this.sanitizeOutput(output),
-                        error: `Process error: ${error.message}`
+                        error: `Process error: ${error.message}`,
+                        mode: 'cli',
                     });
                 }
             });
@@ -418,32 +423,54 @@ export class TraeAgentService {
             }
             const raw = fs.readFileSync(filePath, { encoding: 'utf-8' });
             const data = JSON.parse(raw);
+
             const success: boolean | undefined = data?.success;
             const final_result: string | undefined = data?.final_result ?? undefined;
 
             const toolCalls: ToolCall[] = [];
             const resultsById = new Map<string, string | undefined>();
 
-            const steps: any[] = Array.isArray(data?.agent_steps) ? data.agent_steps : [];
-            // 先收集所有 tool_results，建立 call_id -> result 映射
-            for (const step of steps) {
-                const trs = Array.isArray(step?.tool_results) ? step.tool_results : [];
-                for (const tr of trs) {
+            // 1) 先收集所有可能位置的 tool_results，建立 call_id -> result 映射
+            const collectResults = (arr: any[]) => {
+                for (const tr of arr) {
                     const cid = tr?.call_id;
-                    if (cid) {
+                    if (cid !== undefined && cid !== null) {
                         resultsById.set(String(cid), tr?.result);
                     }
                 }
+            };
+
+            // 顶层 tool_results
+            if (Array.isArray(data?.tool_results)) {
+                collectResults(data.tool_results);
             }
-            // 再收集所有 tool_calls，并关联对应结果
+            // agent_steps.*.tool_results
+            const steps: any[] = Array.isArray(data?.agent_steps) ? data.agent_steps : [];
             for (const step of steps) {
-                const tcs = Array.isArray(step?.tool_calls) ? step.tool_calls : [];
-                for (const tc of tcs) {
+                if (Array.isArray(step?.tool_results)) {
+                    collectResults(step.tool_results);
+                }
+            }
+
+            // 2) 收集所有可能位置的 tool_calls，并关联对应结果
+            const collectCalls = (arr: any[]) => {
+                for (const tc of arr) {
                     const cid = tc?.call_id ? String(tc.call_id) : undefined;
                     const name = tc?.name ?? 'unknown_tool';
-                    const params = tc?.arguments ?? {};
+                    const params = (tc?.arguments ?? tc?.parameters ?? {});
                     const result = cid ? resultsById.get(cid) : undefined;
                     toolCalls.push({ name, parameters: params, result });
+                }
+            };
+
+            // 顶层 tool_calls
+            if (Array.isArray(data?.tool_calls)) {
+                collectCalls(data.tool_calls);
+            }
+            // agent_steps.*.tool_calls
+            for (const step of steps) {
+                if (Array.isArray(step?.tool_calls)) {
+                    collectCalls(step.tool_calls);
                 }
             }
 

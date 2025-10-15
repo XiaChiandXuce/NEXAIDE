@@ -1,6 +1,7 @@
 {
   "name": "nexaide",
   "displayName": "NEXAIDE",
+  "icon": "src/assets/nexaide-logo-128.png",
   "description": "NEXAIDE is an intelligent programming assistant extension, providing AI-based code completion, error fixing, and debugging features to enhance coding efficiency.",
   "version": "0.0.1",
   "engines": {
@@ -77,6 +78,7 @@
     "@vscode/test-cli": "^0.0.11",
     "@vscode/test-electron": "^2.5.2",
     "eslint": "^9.25.1",
+    "http-server": "^14.1.1",
     "ts-loader": "^9.5.2",
     "typescript": "^5.8.3",
     "webpack": "^5.99.7",
