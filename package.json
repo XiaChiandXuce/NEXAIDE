@@ -56,6 +56,36 @@
           "group": "navigation"
         }
       ]
+    },
+    "configuration": {
+      "title": "NEXAIDE",
+      "properties": {
+        "nexaide.mcp.connectTimeoutMs": {
+          "type": "number",
+          "default": 120000,
+          "minimum": 1000,
+          "markdownDescription": "MCP 连接超时时间（毫秒）。用于客户端连接 stdio MCP 服务器时的初始握手超时。"
+        },
+        "nexaide.agentBackend": {
+          "type": "string",
+          "enum": [
+            "codex",
+            "trae"
+          ],
+          "default": "codex",
+          "markdownDescription": "默认使用的 Agent 后端。`codex` 依赖 Codex CLI，`trae` 使用本地 Trae-Agent。"
+        },
+        "nexaide.codex.binaryPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "（可选）Codex CLI 可执行文件的完整路径，例如 `C:/Users/me/AppData/Local/Programs/codex/codex.exe`。留空则按 PATH 自动查找。"
+        },
+        "nexaide.traeAgent.path": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "（可选）Trae-Agent 仓库路径（包含 `trae-cli` 的目录）。留空则在当前工作区及其父目录自动检测。"
+        }
+      }
     }
   },
   "scripts": {

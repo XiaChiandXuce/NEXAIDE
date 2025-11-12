@@ -78,6 +78,40 @@
             display: flex;
             gap: 8px;
         }
+
+        .agent-backend-picker {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(0, 0, 0, 0.15);
+            padding: 2px 8px;
+            border-radius: 4px;
+        }
+
+        .agent-backend-picker label {
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.85);
+        }
+
+        .agent-backend-select {
+            background: rgba(0, 0, 0, 0.25);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.35);
+            border-radius: 4px;
+            padding: 2px 6px;
+            font-size: 12px;
+            height: 24px;
+        }
+
+        .agent-backend-select option {
+            color: black;
+        }
+
+        .agent-backend-status {
+            font-size: 11px;
+            color: rgba(255, 255, 255, 0.85);
+            white-space: nowrap;
+        }
         
         .header-btn {
             background: rgba(255, 255, 255, 0.2);
@@ -555,6 +589,16 @@
         .cmd-btn.run:hover {
             background: var(--vscode-button-hoverBackground);
         }
+        .cmd-btn.approve {
+            background: var(--vscode-testing-icon-passed, #3bb26b);
+            color: #ffffff;
+            border: none;
+        }
+        .cmd-btn.reject {
+            background: var(--vscode-testing-icon-failed, #d70022);
+            color: #ffffff;
+            border: none;
+        }
     </style>
 </head>
 <body>
@@ -565,13 +609,21 @@
                 <span>NEXAIDE AI</span>
             </div>
             <div class="header-actions">
+                <div class="agent-backend-picker">
+                    <label for="agentBackendSelect">后端</label>
+                    <select class="agent-backend-select" id="agentBackendSelect" title="选择 Agent 后端">
+                        <option value="codex" selected>Codex</option>
+                        <option value="trae">Trae-Agent</option>
+                    </select>
+                    <span class="agent-backend-status" id="agentBackendStatus">Codex ⚠️ · Trae ⚠️</span>
+                </div>
                 <button class="header-btn agent-toggle" id="agentToggle" title="切换 Agent 模式">
                     🤖
                     <div class="mode-indicator"></div>
                 </button>
+                <button class="header-btn exec-toggle" id="execModeToggle" title="切换 会话/一次性模式">🌀</button>
                 <button class="header-btn" id="agentInfoBtn" title="Agent 信息">ℹ️</button>
-                <button class="header-btn" id="continueAgentBtn" title="继续任务" style="display: none;">⏭️</button>
-                <button class="header-btn" id="stopAgentBtn" title="结束会话" style="display: none;">⏹️</button>
+                <button class="header-btn" id="stopAgentBtn" title="停止 Agent" style="display: none;">⏹️</button>
                 <button class="header-btn" id="newSessionBtn" title="新建会话">➕</button>
                 <button class="header-btn" id="historyBtn" title="历史会话">📋</button>
                 <button class="header-btn" id="aiManageBtn" title="AI功能管理">🔧</button>
@@ -646,6 +698,7 @@
     
     <script>
         const vscode = acquireVsCodeApi();
+        window._nexaideCodexApprovalId = undefined;
         
         // Get DOM elements
         const chatMessages = document.getElementById('chatMessages');
@@ -659,19 +712,30 @@
         
         // Agent mode elements
         const agentToggle = document.getElementById('agentToggle');
+        const execModeToggle = document.getElementById('execModeToggle');
         const agentInfoBtn = document.getElementById('agentInfoBtn');
-        const continueAgentBtn = document.getElementById('continueAgentBtn');
         const stopAgentBtn = document.getElementById('stopAgentBtn');
         const agentStatus = document.getElementById('agentStatus');
         const agentStatusMessage = document.getElementById('agentStatusMessage');
         const agentProgress = document.getElementById('agentProgress');
+        const agentBackendSelect = document.getElementById('agentBackendSelect');
+        const agentBackendStatus = document.getElementById('agentBackendStatus');
         
         // Agent mode state
         let isAgentMode = false;
         let isAgentAvailable = false;
+        let isSessionMode = true;
+        let currentAgentBackend = 'codex';
+        let codexBackendAvailable = false;
+        let traeBackendAvailable = false;
         
         // Load saved state
-        const state = vscode.getState() || { messages: [], selectedModel: 'qwen-max' };
+        const state = vscode.getState() || { messages: [], selectedModel: 'qwen-max', agentBackend: 'codex' };
+
+        if (agentBackendSelect && state.agentBackend) {
+            agentBackendSelect.value = state.agentBackend;
+            currentAgentBackend = state.agentBackend;
+        }
         
         // Restore messages
         if (state.messages && state.messages.length > 0) {
@@ -711,9 +775,27 @@
         closeBtn.addEventListener('click', closePlugin);
         
         // Agent mode event listeners
+        if (agentBackendSelect) {
+            agentBackendSelect.addEventListener('change', () => {
+                const backend = agentBackendSelect.value === 'trae' ? 'trae' : 'codex';
+                if (backend === currentAgentBackend) {
+                    return;
+                }
+                currentAgentBackend = backend;
+                vscode.postMessage({ command: 'setAgentBackend', backend });
+                isAgentAvailable = backend === 'codex'
+                    ? codexBackendAvailable
+                    : traeBackendAvailable;
+                updateAgentUI();
+                saveState();
+                const label = backend === 'codex' ? 'Codex Agent' : 'Trae-Agent';
+                showMessage(`首选 Agent 后端切换为 ${label}`, 'info');
+            });
+        }
+
         agentToggle.addEventListener('click', toggleAgentMode);
+        execModeToggle.addEventListener('click', toggleExecMode);
         agentInfoBtn.addEventListener('click', getAgentInfo);
-        continueAgentBtn.addEventListener('click', continueAgent);
         stopAgentBtn.addEventListener('click', stopAgent);
         
         // Close agent status overlay when clicking outside
@@ -879,7 +961,13 @@
             // 紧接着主动请求刷新可用性状态，避免返回插件后状态不同步
             vscode.postMessage({ command: 'getAgentStatus' });
         }
-        
+
+        function toggleExecMode() {
+            isSessionMode = !isSessionMode;
+            updateExecUI();
+            vscode.postMessage({ command: 'toggleExecMode', sessionEnabled: isSessionMode });
+        }
+
         function getAgentInfo() {
             vscode.postMessage({ command: 'getAgentInfo' });
         }
@@ -889,26 +977,40 @@
             hideAgentStatus();
             stopAgentBtn.style.display = 'none';
         }
-
-        function continueAgent() {
-            vscode.postMessage({ command: 'continueAgent' });
-        }
         
         function updateAgentUI() {
+            const backendLabel = currentAgentBackend === 'trae' ? 'Trae-Agent' : 'Codex Agent';
             if (isAgentMode && isAgentAvailable) {
                 agentToggle.classList.add('active');
-                agentToggle.title = '切换到普通模式';
-                continueAgentBtn.style.display = 'inline-block';
+                agentToggle.title = `切换到普通模式（当前：${backendLabel}）`;
             } else {
                 agentToggle.classList.remove('active');
-                agentToggle.title = '切换到 Agent 模式';
-                continueAgentBtn.style.display = 'none';
+                agentToggle.title = `切换到 Agent 模式（当前：${backendLabel}）`;
             }
             
             if (!isAgentAvailable) {
                 agentToggle.classList.add('unavailable');
             } else {
                 agentToggle.classList.remove('unavailable');
+            }
+        }
+
+        function updateBackendStatusLabel() {
+            if (!agentBackendStatus) {
+                return;
+            }
+            const codexText = codexBackendAvailable ? 'Codex ✅' : 'Codex ⚠️';
+            const traeText = traeBackendAvailable ? 'Trae ✅' : 'Trae ⚠️';
+            agentBackendStatus.textContent = `${codexText} · ${traeText}`;
+        }
+
+        function updateExecUI() {
+            if (isSessionMode) {
+                execModeToggle.classList.add('active');
+                execModeToggle.title = '切换到一次性模式';
+            } else {
+                execModeToggle.classList.remove('active');
+                execModeToggle.title = '切换到会话模式';
             }
         }
         
@@ -980,7 +1082,8 @@
             
             vscode.setState({
                 messages: messages,
-                selectedModel: modelSelector.value
+                selectedModel: modelSelector.value,
+                agentBackend: agentBackendSelect ? agentBackendSelect.value : currentAgentBackend
             });
         }
         
@@ -1080,13 +1183,26 @@
                         showAgentStatus(text, showProgress);
                     }
                     break;
-                case 'agentStatus':
-                    isAgentAvailable = message.available;
+                case 'agentStatus': {
+                    codexBackendAvailable = !!message.codexAvailable;
+                    traeBackendAvailable = !!message.traeAvailable;
+                    const backendFromExtension = message.preferredBackend || message.activeBackend;
+                    if (backendFromExtension) {
+                        currentAgentBackend = backendFromExtension;
+                        if (agentBackendSelect) {
+                            agentBackendSelect.value = backendFromExtension;
+                        }
+                    }
+                    isAgentAvailable = currentAgentBackend === 'codex'
+                        ? codexBackendAvailable
+                        : traeBackendAvailable;
+                    updateBackendStatusLabel();
                     updateAgentUI();
                     if (message.info) {
                         showMessage(message.info, 'info');
                     }
                     break;
+                }
                 case 'agentProgress':
                     if (message.status === 'executing') {
                         // 如果工具卡片正在显示，则不再刷进度，避免造成“仍在执行”的错觉
@@ -1111,22 +1227,28 @@
                 // 展示工具调用详情（瀑布式卡片，从上到下依次排列）
                 case 'showToolCalls':
                     if (Array.isArray(message.toolCalls) && message.toolCalls.length > 0) {
+                        const approvalId = message.approvalRequestId;
+                        const isCodexApproval = message.approvalSource === 'codex' && typeof approvalId !== 'undefined';
                         window._nexaideToolCallsVisible = true;
                         hideAgentStatus();
+                        if (isCodexApproval) {
+                            window._nexaideCodexApprovalId = approvalId;
+                        } else {
+                            window._nexaideCodexApprovalId = undefined;
+                        }
                         const toolCalls = message.toolCalls;
                         const header = document.createElement('div');
                         header.className = 'tool-calls';
                         header.innerHTML = `<div><strong>🔧 工具调用（共 ${toolCalls.length} 步）</strong></div>`;
                         chatMessages.appendChild(header);
 
-                        // 逐条渲染命令卡片（瀑布式）
                         for (let i = 0; i < toolCalls.length; i++) {
                             const tc = toolCalls[i];
                             const name = tc.name || '未知工具';
                             const params = (tc.parameters !== undefined ? tc.parameters : (tc.arguments !== undefined ? tc.arguments : {}));
                             let commandText = '';
                             let workingDirectory = '';
-                            if (name === 'bash') {
+                            if (name === 'bash' || name === 'codex_exec') {
                                 if (typeof params === 'string') {
                                     commandText = params;
                                 } else if (params && typeof params === 'object') {
@@ -1155,7 +1277,7 @@
                                 if (!safeCommand) { showMessage('⚠️ 无可复制命令', 'warning'); return; }
                                 navigator.clipboard.writeText(safeCommand).then(() => {
                                     showMessage('✅ 已复制命令到剪贴板', 'success');
-                                }).catch(() => showMessage('❌ 复制失败', 'error'));
+                                }).catch(() => showMessage('⚠️ 复制失败', 'error'));
                             });
                             runBtn?.addEventListener('click', () => {
                                 if (!safeCommand) {
@@ -1171,28 +1293,51 @@
                             chatMessages.appendChild(card);
                         }
 
-                        // 统一的“完成并继续”操作按钮，追加在所有卡片之后
                         const actionBar = document.createElement('div');
                         actionBar.className = 'tool-actions';
-                        const doneBtn = document.createElement('button');
-                        doneBtn.className = 'cmd-btn done';
-                        doneBtn.textContent = '完成并继续';
-                        doneBtn.addEventListener('click', () => {
+                        const approveBtn = document.createElement('button');
+                        approveBtn.className = `cmd-btn ${isCodexApproval ? 'approve' : 'done'}`;
+                        approveBtn.textContent = isCodexApproval ? '批准并继续' : '完成并继续';
+                        approveBtn.addEventListener('click', () => {
                             window._nexaideToolCallsVisible = false;
+                            if (isCodexApproval) {
+                                vscode.postMessage({ command: 'codexApprovalResult', decision: 'approved', requestId: approvalId });
+                                window._nexaideCodexApprovalId = undefined;
+                            }
                             vscode.postMessage({ command: 'toolCallsCompleted' });
-                            showMessage('✅ 已完成工具步骤，继续生成回复。', 'success');
+                            showMessage(isCodexApproval ? '✅ 已批准命令，继续生成回复。' : '✅ 已完成工具步骤，继续生成回复。', 'success');
                         });
-                        actionBar.appendChild(doneBtn);
-                        chatMessages.appendChild(actionBar);
+                        actionBar.appendChild(approveBtn);
 
+                        if (isCodexApproval) {
+                            const rejectBtn = document.createElement('button');
+                            rejectBtn.className = 'cmd-btn reject';
+                            rejectBtn.textContent = '拒绝命令';
+                            rejectBtn.addEventListener('click', () => {
+                                window._nexaideToolCallsVisible = false;
+                                window._nexaideCodexApprovalId = undefined;
+                                vscode.postMessage({ command: 'codexApprovalResult', decision: 'denied', requestId: approvalId });
+                                vscode.postMessage({ command: 'toolCallsCompleted' });
+                                showMessage('⚠️ 已拒绝命令，等待新的方案。', 'warning');
+                            });
+                            actionBar.appendChild(rejectBtn);
+                        }
+
+                        chatMessages.appendChild(actionBar);
                         chatMessages.scrollTop = chatMessages.scrollHeight;
                         saveState();
                     }
                     break;
+
                 case 'agentModeToggled':
                     isAgentMode = message.enabled;
                     updateAgentUI();
                     showMessage(isAgentMode ? '🤖 已切换到 Agent 模式' : '💬 已切换到普通模式', 'success');
+                    break;
+                case 'agentExecModeToggled':
+                    isSessionMode = !!message.sessionEnabled;
+                    updateExecUI();
+                    showMessage(isSessionMode ? '🌀 已切换到 会话模式' : '⚡ 已切换到 一次性模式', 'success');
                     break;
             }
         });
@@ -1212,6 +1357,8 @@
             }
         });
 
+        updateBackendStatusLabel();
+        updateExecUI();
         chatInput.focus();
     </script>
 </body>

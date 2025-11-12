@@ -15,7 +15,10 @@
 			"outFiles": [
 				"${workspaceFolder}/dist/**/*.js"
 			],
-			"preLaunchTask": "${defaultBuildTask}"
+			"preLaunchTask": "${defaultBuildTask}",
+			"env": {
+				"NEXAIDE_CODEX_PATH": "c:\\\\Users\\\\14592\\\\.vscode\\\\extensions\\\\openai.chatgpt-0.4.38-win32-x64\\\\bin\\\\windows-x86_64\\\\codex.exe"
+			}
 		}
 	]
 }

@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 
 export interface TraeAgentResponse {
     success: boolean;
@@ -22,245 +23,97 @@ export interface ToolCall {
 
 export class TraeAgentService {
     private traeAgentPath: string;
-    private traeCommand = 'D:\\TYHProjectLibrary\\AICcompiler\\NEXAIDE\\trae-agent-main\\.venv\\Scripts\\trae-cli.exe';
+    private traeCommand: string;
     private isAvailable: boolean = false;
     private currentProcess: ChildProcess | null = null;
     private initializationPromise: Promise<void>;
     // MCP 客户端相关属性
     private mcpClient: Client | null = null;
     private mcpTransport: StdioClientTransport | null = null;
-    // 进度与交互相关
-    private progressCallback?: (data: string) => void;
-    private nextResultResolvers: Array<(resp: TraeAgentResponse) => void> = [];
     private mcpConnectingPromise: Promise<boolean> | undefined;
+    private lastMCPIssue: string | null = null;
+    private mcpStderrBuffer: string[] = [];
 
     constructor(extensionPath: string) {
-        // 使用正确的 trae-agent-main 路径
-        this.traeAgentPath = 'D:\\TYHProjectLibrary\\AICcompiler\\NEXAIDE\\trae-agent-main';
-        this.initializationPromise = this.checkAvailability();
-    }
+        // 解析 trae-agent-main 路径：优先环境变量，其次工作区与 extensionPath 的相对位置
+        const envOverride = process.env.NEXAIDE_TRAE_AGENT_PATH?.trim();
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath;
+        const candidates: string[] = [];
 
-    /**
-     * 使用 Trae-Agent 的交互模式执行任务（simple console）。
-     * 通过 stdin 依次喂入 task 与 working directory；完成一次任务后发送 exit 结束会话。
-     */
-    public async executeAgentInteractive(
-        message: string,
-        options: {
-            timeout?: number;
-            maxDuration?: number;
-            workingDirectory?: string;
-            onProgress?: (data: string) => void;
-        } = {}
-    ): Promise<TraeAgentResponse> {
-        if (!this.isAvailable) {
-            return {
-                success: false,
-                content: '',
-                error: 'Trae-agent is not available. Please ensure it is properly installed.'
-            };
+        if (envOverride) {
+            candidates.push(envOverride);
         }
-
-        if (!options.workingDirectory) {
-            return {
-                success: false,
-                content: '',
-                error: '未检测到项目工作目录。请先打开项目根目录或在界面中选择工作目录后再执行 Agent。'
-            };
+        if (workspaceRoot) {
+            candidates.push(path.join(workspaceRoot, 'trae-agent-main'));
+            candidates.push(path.join(workspaceRoot, '..', 'trae-agent-main'));
         }
-        const workingDir = options.workingDirectory;
+        // 基于扩展安装目录的常见相对位置
+        candidates.push(path.join(extensionPath, '..', '..', 'trae-agent-main'));
+        candidates.push(path.join(extensionPath, '..', 'trae-agent-main'));
+        candidates.push(path.join(extensionPath, 'trae-agent-main'));
 
-        return new Promise((resolve) => {
-            const timeout = options.timeout ?? 300000; // 不活动窗口 300s
-            const maxDuration = options.maxDuration ?? 900000; // 总时长 15min 上限
+        const cliName = process.platform === 'win32' ? 'trae-cli.exe' : 'trae-cli';
+        const uniqueCandidates = Array.from(new Set(candidates.filter((item): item is string => !!item)));
 
-            let output = '';
-            let errorOutput = '';
-            let isResolved = false;
-            let trajectoryPath: string | undefined;
-
-            const configPath = path.join(this.traeAgentPath, 'trae_config.yaml');
-            const args = [
-                'interactive',
-                '--config-file',
-                configPath,
-                '--console-type',
-                'simple',
-                '--agent-type',
+        const hasRepoMarkers = (candidate: string): boolean => {
+            const markers = [
                 'trae_agent',
+                'pyproject.toml',
+                'trae_config.yaml',
+                path.join('trae_agent', 'cli.py')
             ];
-            this.logDebug(`Launching interactive CLI: ${this.traeCommand} ${JSON.stringify(args)}`, options.onProgress);
-
-            this.currentProcess = spawn(this.traeCommand, args, {
-                stdio: ['pipe', 'pipe', 'pipe'],
-                cwd: workingDir,
-                env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' }
-            });
-
-            // 记录进度回调（允许后续继续任务复用）
-            this.progressCallback = options.onProgress;
-
-            // 写入一轮交互（Task、Working Directory），随后在任务完成后发送 exit 结束会话
-            const feedInputs = () => {
+            return markers.some((marker) => {
                 try {
-                    this.currentProcess?.stdin?.write(`${message}\n`);
-                    this.currentProcess?.stdin?.write(`${workingDir}\n`);
-                } catch (e) {
-                    // 忽略写入异常，让错误由进程错误事件处理
+                    return fs.existsSync(path.join(candidate, marker));
+                } catch {
+                    return false;
                 }
-            };
+            });
+        };
 
-            // 超时管理
-            let timeoutId: NodeJS.Timeout;
-            let overallTimeoutId: NodeJS.Timeout;
-            const onTimeout = () => {
-                if (!isResolved && this.currentProcess) {
-                    this.currentProcess.kill('SIGTERM');
-                    isResolved = true;
-                    resolve({
-                        success: false,
-                        content: this.sanitizeOutput(output),
-                        error: 'Trae-agent interactive execution timed out'
-                    });
-                }
-            };
-            const onOverallTimeout = () => {
-                if (!isResolved && this.currentProcess) {
-                    this.currentProcess.kill('SIGTERM');
-                    isResolved = true;
-                    resolve({
-                        success: false,
-                        content: this.sanitizeOutput(output),
-                        error: 'Trae-agent interactive execution reached max total duration'
-                    });
-                }
-            };
-            const refreshTimeout = () => {
-                if (timeoutId) { clearTimeout(timeoutId); }
-                timeoutId = setTimeout(onTimeout, timeout);
-            };
-            refreshTimeout();
-            overallTimeoutId = setTimeout(onOverallTimeout, maxDuration);
-
-            // 处理 stdout
-            this.currentProcess.stdout?.on('data', (data) => {
-                const chunkRaw = data.toString();
-                const chunk = this.sanitizeOutput(chunkRaw);
-                output += chunk;
-                refreshTimeout();
-
-                // 捕获“Trajectory saved to:” 获取轨迹文件路径
-                const trajMatch = chunk.match(/Trajectory saved to:\s*(.+)$/m);
-                if (trajMatch && trajMatch[1]) {
-                    trajectoryPath = trajMatch[1].trim();
-                    // 一旦检测到轨迹保存，立即解析并返回本轮结果，但不关闭会话
-                    const traj = this.parseTrajectoryFile(trajectoryPath);
-                    const finalContent = traj?.final_result ?? this.sanitizeOutput(output.trim());
-                    const toolCalls = traj?.toolCalls ?? this.parseToolCalls(output);
-                    const response: TraeAgentResponse = {
-                        success: true,
-                        content: finalContent,
-                        toolCalls,
-                        mode: 'cli',
-                    };
-                    if (!isResolved) {
-                        isResolved = true;
-                        try { clearTimeout(timeoutId); } catch {}
-                        try { clearTimeout(overallTimeoutId); } catch {}
-                        resolve(response);
-                    } else if (this.nextResultResolvers.length > 0) {
-                        const resolver = this.nextResultResolvers.shift();
-                        try { resolver && resolver(response); } catch {}
+        const findLocalTraeCli = (candidate: string): string | undefined => {
+            const scriptDirs = process.platform === 'win32'
+                ? [path.join(candidate, '.venv', 'Scripts')]
+                : [path.join(candidate, '.venv', 'bin'), path.join(candidate, '.venv', 'Scripts')];
+            const cliCandidates = process.platform === 'win32' ? ['trae-cli.exe', 'trae-cli'] : ['trae-cli'];
+            for (const dir of scriptDirs) {
+                for (const cli of cliCandidates) {
+                    const fullPath = path.join(dir, cli);
+                    try {
+                        if (fs.existsSync(fullPath)) {
+                            return fullPath;
+                        }
+                    } catch {
+                        // ignore
                     }
                 }
-
-                const cb = this.progressCallback || options.onProgress;
-                if (cb) {
-                    cb(chunk);
-                }
-            });
-
-            // 处理 stderr
-            this.currentProcess.stderr?.on('data', (data) => {
-                const errRaw = data.toString();
-                errorOutput += this.sanitizeOutput(errRaw);
-                refreshTimeout();
-            });
-
-            // 启动后立即喂入交互输入
-            setTimeout(feedInputs, 50);
-
-            // 监听进程关闭
-            this.currentProcess.on('close', (code) => {
-                clearTimeout(timeoutId);
-                clearTimeout(overallTimeoutId);
-                this.currentProcess = null;
-
-                if (!isResolved) {
-                    isResolved = true;
-                    const traj = trajectoryPath ? this.parseTrajectoryFile(trajectoryPath) : null;
-                    const finalContent = traj?.final_result ?? this.sanitizeOutput(output.trim());
-                    const toolCalls = traj?.toolCalls ?? this.parseToolCalls(output);
-                    const success = code === 0 && (traj?.success !== false);
-
-                    resolve({
-                        success,
-                        content: finalContent,
-                        toolCalls,
-                        error: code === 0 ? undefined : (errorOutput.trim() || `Process exited with code ${code}`),
-                        mode: 'cli', // 交互模式仍由 CLI 承载
-                    });
-                }
-            });
-
-            // 监听错误
-            this.currentProcess.on('error', (error) => {
-                clearTimeout(timeoutId);
-                clearTimeout(overallTimeoutId);
-                this.currentProcess = null;
-
-                if (!isResolved) {
-                    isResolved = true;
-                    resolve({
-                        success: false,
-                        content: this.sanitizeOutput(output),
-                        error: `Process error: ${error.message}`,
-                        mode: 'cli',
-                    });
-                }
-            });
-
-            // 移除自动发送 exit 的逻辑，保持交互会话打开
-        });
-    }
-
-    /**
-     * 继续向当前交互会话输入多行（如：新的任务与同工作目录），并等待下一次结果。
-     */
-    public async sendInteractiveInput(lines: string[], onProgress?: (data: string) => void): Promise<TraeAgentResponse> {
-        if (!this.currentProcess) {
-            return Promise.resolve({ success: false, content: '', error: 'No active interactive session', mode: 'cli' });
-        }
-        // 更新进度回调（如果提供）
-        if (onProgress) {
-            this.progressCallback = onProgress;
-        }
-        try {
-            for (const ln of lines) {
-                this.currentProcess.stdin?.write(`${ln}\n`);
             }
-        } catch (e) {
-            return Promise.resolve({ success: false, content: '', error: `Failed to write to stdin: ${e instanceof Error ? e.message : String(e)}`, mode: 'cli' });
-        }
-        // 返回一个 Promise，等待下一次轨迹保存事件触发（由 stdout 监听解析）
-        return new Promise<TraeAgentResponse>((resolve) => {
-            this.nextResultResolvers.push(resolve);
-        });
-    }
+            return undefined;
+        };
 
-    /** 设置/替换进度回调 */
-    public setProgressCallback(cb?: (data: string) => void): void {
-        this.progressCallback = cb;
+        const resolveTraeAgentPath = (paths: string[]): string | null => {
+            for (const p of paths) {
+                if (!p) {
+                    continue;
+                }
+                try {
+                    if (fs.existsSync(p) && hasRepoMarkers(p)) {
+                        return p;
+                    }
+                } catch {
+                    // ignore
+                }
+            }
+            return null;
+        };
+
+        const resolved = resolveTraeAgentPath(uniqueCandidates) ?? envOverride ?? path.join(process.cwd(), 'trae-agent-main');
+        this.traeAgentPath = resolved;
+
+        const localCli = this.traeAgentPath ? findLocalTraeCli(this.traeAgentPath) : undefined;
+        this.traeCommand = localCli ?? cliName;
+
+        this.initializationPromise = this.checkAvailability();
     }
 
     /**
@@ -278,8 +131,9 @@ export class TraeAgentService {
                 }
 
                 // 检查 trae-cli.exe 是否存在
-                if (!fs.existsSync(this.traeCommand)) {
-                    console.warn('Trae-cli.exe not found:', this.traeCommand);
+                const commandLooksLikePath = path.isAbsolute(this.traeCommand) || this.traeCommand.includes(path.sep);
+                if (commandLooksLikePath && !fs.existsSync(this.traeCommand)) {
+                    console.warn('[NEXAIDE] Trae CLI not found:', this.traeCommand, 'Please run \"uv sync --all-extras\" inside the Trae repository.');
                     this.isAvailable = false;
                     resolve();
                     return;
@@ -287,7 +141,9 @@ export class TraeAgentService {
 
                 // 尝试运行 trae-cli --help 来验证安装
                 const testProcess = spawn(this.traeCommand, ['--help'], {
-                    stdio: ['pipe', 'pipe', 'pipe']
+                    stdio: ['pipe', 'pipe', 'pipe'],
+                    cwd: this.traeAgentPath,
+                    env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' }
                 });
 
                 testProcess.on('close', (code) => {
@@ -353,38 +209,128 @@ export class TraeAgentService {
         }
         this.mcpConnectingPromise = (async () => {
             try {
+                this.lastMCPIssue = null;
+                this.mcpStderrBuffer = [];
                 const pythonPath = path.join(this.traeAgentPath, '.venv', 'Scripts', 'python.exe');
                 const serverPath = path.join(this.traeAgentPath, 'mcp_server.py');
-                this.logDebug(`MCP connecting: python=${pythonPath}, server=${serverPath}`);
+                // 使用内联入口修复服务端初始化 capabilities 时的 None 访问错误
+                const wrapperCode = [
+                    'import sys, asyncio',
+                    `sys.path.insert(0, r"${this.traeAgentPath.replace(/\\/g, '\\\\')}")`,
+                    'from mcp.server.stdio import stdio_server',
+                    'from mcp.server.lowlevel.server import NotificationOptions',
+                    'from mcp.server.models import InitializationOptions',
+                    'from mcp_server import TraeAgentMCPServer',
+                    'async def main():',
+                    '    s=TraeAgentMCPServer(); s.setup_handlers()',
+                    '    async with stdio_server() as (r,w):',
+                    '        await s.server.run(r,w, InitializationOptions(server_name="trae-agent", server_version="1.0.0", capabilities=s.server.get_capabilities(notification_options=NotificationOptions(), experimental_capabilities={}),))',
+                    'asyncio.run(main())'
+                ].join('\n');
+                const useWrapper = true; // 始终使用更稳健的入口以避免服务端已知缺陷
+                this.logDebug(`MCP connecting: python=${pythonPath}, server=${serverPath}, useWrapper=${useWrapper}`);
 
                 const filteredEnv = Object.fromEntries(
                     Object.entries(process.env).filter(([_, v]) => typeof v === 'string')
                 ) as Record<string, string>;
-                const env: Record<string, string> = { ...filteredEnv, PYTHONUNBUFFERED: '1' };
+                // 强化 Windows 下的编码与路径环境，避免 JSON/Unicode 解析问题与包导入失败
+                const env: Record<string, string> = {
+                    ...filteredEnv,
+                    PYTHONUNBUFFERED: '1',
+                    PYTHONIOENCODING: 'utf-8',
+                    PYTHONUTF8: '1',
+                    PYTHONPATH: this.traeAgentPath,
+                };
 
                 this.mcpTransport = new StdioClientTransport({
                     command: pythonPath,
-                    args: [serverPath],
+                    args: useWrapper ? ['-c', wrapperCode] : [serverPath],
                     env,
                     cwd: this.traeAgentPath,
+                    stderr: 'pipe', // 将 stderr 管道化，便于捕获错误输出
                 });
+
+                // 预先挂载 stderr 监听，避免丢失早期报错
+                try {
+                    const stderr = (this.mcpTransport as any).stderr;
+                    if (stderr && typeof stderr.on === 'function') {
+                        stderr.on('data', (chunk: Buffer | string) => {
+                            const text = chunk instanceof Buffer ? chunk.toString('utf-8') : String(chunk);
+                            const line = text.trim();
+                            // 记录最近 50 行 stderr，便于失败时展示尾部
+                            if (line) {
+                                this.mcpStderrBuffer.push(line);
+                                if (this.mcpStderrBuffer.length > 50) {
+                                    this.mcpStderrBuffer.shift();
+                                }
+                            }
+                            this.logDebug(`MCP stderr: ${line}`);
+                        });
+                    }
+                } catch (hookErr) {
+                    this.logDebug(`Attach MCP stderr listener failed: ${hookErr instanceof Error ? hookErr.message : String(hookErr)}`);
+                }
+
+                // 传输层错误/关闭监听
+                try {
+                    (this.mcpTransport as any).onerror = (error: any) => {
+                        this.logDebug(`MCP transport error: ${error instanceof Error ? error.message : String(error)}`);
+                    };
+                    (this.mcpTransport as any).onclose = () => {
+                        this.logDebug('MCP transport closed');
+                    };
+                } catch { /* noop */ }
 
                 this.mcpClient = new Client({
                     name: 'nexaide-plugin',
                     version: '0.1.0',
                 });
 
-                // 可选：注册能力（roots）
                 this.mcpClient.registerCapabilities({
                     roots: {},
                 });
 
-                await this.mcpClient.connect(this.mcpTransport, { timeout: 60000 });
+                const connectTimeoutMs = vscode.workspace.getConfiguration('nexaide').get<number>('mcp.connectTimeoutMs') ?? 120000;
+                await this.mcpClient.connect(this.mcpTransport, { timeout: connectTimeoutMs });
+                this.lastMCPIssue = 'connected';
+
+                // 记录服务器能力与 PID
+                try {
+                    const caps = (this.mcpClient as any).getServerCapabilities?.();
+                    const pid = (this.mcpTransport as any).pid;
+                    this.logDebug(`MCP server caps: ${JSON.stringify(caps)}, pid: ${pid}`);
+                } catch { /* noop */ }
+
+                // 连接后主动列举工具，确保 run_trae_agent 可用
+                try {
+                    const tools = await (this.mcpClient as any).listTools?.();
+                    if (Array.isArray(tools?.tools)) {
+                        const hasRunTool = tools.tools.some((t: any) => t?.name === 'run_trae_agent');
+                        if (!hasRunTool) {
+                            this.logDebug('MCP connected but run_trae_agent not found');
+                            this.lastMCPIssue = 'run_trae_agent not found in tools';
+                            this.mcpClient = null;
+                            this.mcpTransport = null;
+                            return false;
+                        }
+                    }
+                } catch (listErr) {
+                    this.logDebug(`MCP listTools failed: ${listErr instanceof Error ? listErr.message : String(listErr)}`);
+                    const tail = this.mcpStderrBuffer.slice(-6).join(' | ');
+                    this.lastMCPIssue = `listTools failed: ${listErr instanceof Error ? listErr.message : String(listErr)}${tail ? '; stderr: ' + tail : ''}`;
+                    this.mcpClient = null;
+                    this.mcpTransport = null;
+                    return false;
+                }
+
                 this.logDebug('MCP connected successfully');
                 return true;
             } catch (err) {
                 console.error('MCP 连接失败:', err);
-                this.logDebug(`MCP connect failed: ${err instanceof Error ? err.message : String(err)}`);
+                const msg = err instanceof Error ? err.message : String(err);
+                this.logDebug(`MCP connect failed: ${msg}`);
+                const tail = this.mcpStderrBuffer.slice(-6).join(' | ');
+                this.lastMCPIssue = `connect failed: ${msg}${tail ? '; stderr: ' + tail : ''}`;
                 this.mcpClient = null;
                 this.mcpTransport = null;
                 return false;
@@ -433,7 +379,13 @@ export class TraeAgentService {
             const connected = await this.ensureMCPConnected();
             if (connected && this.mcpClient) {
                 const args: Record<string, unknown> = { message, working_directory: workingDir };
-                const result: any = await this.mcpClient.callTool({ name: 'run_trae_agent', arguments: args });
+                const mcpTimeout = (options?.maxDuration ?? 600000); // 默认 10 分钟
+                this.logDebug(`MCP callTool timeout=${mcpTimeout}ms`, options.onProgress);
+                const result: any = await (this.mcpClient as any).callTool(
+                    { name: 'run_trae_agent', arguments: args },
+                    CallToolResultSchema,
+                    { timeout: mcpTimeout }
+                );
                 let text = '';
                 if (result && Array.isArray(result.content)) {
                     for (const item of result.content) {
@@ -443,12 +395,23 @@ export class TraeAgentService {
                     }
                 }
                 if (text) {
+                    options.onProgress?.('✅ Agent 使用 MCP 模式\n');
+                    this.lastMCPIssue = null;
                     return { success: true, content: text, mode: 'mcp' };
+                } else {
+                    const reason = 'MCP 工具返回内容为空';
+                    this.lastMCPIssue = reason;
+                    options.onProgress?.(`ℹ ${reason}，回退到 CLI 模式\n`);
                 }
+            } else {
+                options.onProgress?.(`ℹ MCP 未就绪（原因：${this.lastMCPIssue ?? '未知'}），回退到 CLI 模式\n`);
             }
         } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            const tail = this.mcpStderrBuffer.slice(-6).join(' | ');
+            this.lastMCPIssue = `callTool error: ${msg}${tail ? '; stderr: ' + tail : ''}`;
             if (options.onProgress) {
-                options.onProgress(`⚠ MCP 调用失败，回退到 CLI：${e instanceof Error ? e.message : String(e)}\n`);
+                options.onProgress(`⚠ MCP 调用失败（原因：${msg}${tail ? '；stderr尾部：' + tail : ''}），回退到 CLI\n`);
             }
         }
 
@@ -548,6 +511,7 @@ export class TraeAgentService {
                     const success = code === 0 && (traj?.success !== false);
                     
                     if (code === 0) {
+                        options.onProgress?.('✅ Agent 使用 CLI 模式\n');
                         resolve({
                             success,
                             content: finalContent,
@@ -555,6 +519,7 @@ export class TraeAgentService {
                             mode: 'cli',
                         });
                     } else {
+                        options.onProgress?.('✅ Agent 使用 CLI 模式（进程非零退出）\n');
                         resolve({
                             success: false,
                             content: finalContent,
@@ -787,4 +752,145 @@ export class TraeAgentService {
     public getTraeAgentPath(): string {
         return this.traeAgentPath;
     }
-}
+
+    // 会话模式：优先 MCP 的 start_agent_session/inject_observation，失败时回退 CLI 一次性
+    public async executeAgentSession(
+        message: string,
+        options: {
+            timeout?: number;
+            maxDuration?: number;
+            workingDirectory?: string;
+            onProgress?: (data: string) => void;
+        } = {}
+    ): Promise<TraeAgentResponse> {
+        if (!this.isAvailable) {
+            return { success: false, content: '', error: 'Trae-agent is not available. Please ensure it is properly installed.' };
+        }
+        if (!options.workingDirectory) {
+            return { success: false, content: '', error: '未检测到项目工作目录。请先打开项目根目录或在界面中选择工作目录后再执行 Agent。' };
+        }
+        const workingDir = options.workingDirectory;
+
+        try {
+            options.onProgress?.('🔌 正在连接 MCP 服务器...\n');
+            const connected = await this.ensureMCPConnected();
+            if (connected && this.mcpClient) {
+                // 读取会话状态，仅在 WAITING 时才进行注入
+                let sessionState: string | null = null;
+                try {
+                    const statusRes: any = await (this.mcpClient as any).callTool(
+                        { name: 'get_session_status', arguments: {} },
+                        CallToolResultSchema,
+                        { timeout: options.maxDuration ?? 600000 }
+                    );
+                    let statusText = '';
+                    if (statusRes && Array.isArray(statusRes.content)) {
+                        for (const item of statusRes.content) {
+                            if (item.type === 'text' && typeof item.text === 'string') {
+                                statusText += item.text;
+                            }
+                        }
+                    }
+                    const trimmed = statusText.trim();
+                    if (trimmed && !/^No active session/i.test(trimmed)) {
+                        try {
+                            const obj = JSON.parse(trimmed);
+                            sessionState = obj?.state ?? null;
+                        } catch {
+                            sessionState = 'UNKNOWN';
+                        }
+                    }
+                } catch { /* ignore */ }
+
+                const isWaiting = sessionState === 'WAITING';
+                const callName = isWaiting ? 'inject_observation' : 'start_agent_session';
+                const args = isWaiting
+                    ? { observation: message }
+                    : { message, project_path: workingDir, issue: message };
+
+                this.logDebug(`MCP session call: ${callName}`, options.onProgress);
+                const result: any = await (this.mcpClient as any).callTool(
+                    { name: callName, arguments: args },
+                    CallToolResultSchema,
+                    { timeout: options.maxDuration ?? 600000 }
+                );
+                let text = '';
+                if (result && Array.isArray(result.content)) {
+                    for (const item of result.content) {
+                        if (item.type === 'text' && typeof item.text === 'string') {
+                            text += item.text;
+                        }
+                    }
+                }
+
+                if (text) {
+                    let success = true;
+                    let content = text;
+                    if (/^\s*Error:/i.test(text)) {
+                        success = false;
+                    }
+                    try {
+                        const obj = JSON.parse(text);
+                        if (typeof obj === 'object' && obj) {
+                            success = obj.success !== false;
+                            content = obj.final_result && String(obj.final_result).trim()
+                                ? String(obj.final_result)
+                                : `状态: ${obj.state ?? 'UNKNOWN'}\n步骤: ${obj.steps ?? 0}`;
+                        }
+                    } catch {
+                        // 非 JSON，保留原始文本
+                    }
+
+                    if (success) {
+                        options.onProgress?.('✅ Agent 使用 MCP 会话模式\n');
+                        this.lastMCPIssue = null;
+                    } else {
+                        options.onProgress?.('⚠ MCP 会话工具返回错误\n');
+                        this.lastMCPIssue = 'MCP 会话工具返回错误';
+                    }
+                    return { success, content, mode: 'mcp' };
+                } else {
+                    const reason = 'MCP 会话工具返回内容为空';
+                    this.lastMCPIssue = reason;
+                    options.onProgress?.(`ℹ ${reason}，回退到 CLI 一次性模式\n`);
+                }
+            } else {
+                options.onProgress?.(`ℹ MCP 未就绪（原因：${this.lastMCPIssue ?? '未知'}），回退到 CLI 一次性\n`);
+            }
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            const tail = this.mcpStderrBuffer.slice(-6).join(' | ');
+            this.lastMCPIssue = `callTool error: ${msg}${tail ? '; stderr: ' + tail : ''}`;
+            options.onProgress?.(`⚠ MCP 会话调用失败（原因：${msg}${tail ? '；stderr尾部：' + tail : ''}），回退到 CLI\n`);
+        }
+
+        // 回退到一次性 CLI
+        return this.executeAgent(message, options);
+    }
+
+    // 结束会话：调用 MCP finalize_session
+    public async finalizeSession(): Promise<string> {
+        try {
+            const connected = await this.ensureMCPConnected();
+            if (connected && this.mcpClient) {
+                const res: any = await (this.mcpClient as any).callTool(
+                    { name: 'finalize_session', arguments: {} },
+                    CallToolResultSchema,
+                    { timeout: 30000 }
+                );
+                let text = '';
+                if (res && Array.isArray(res.content)) {
+                    for (const item of res.content) {
+                        if (item.type === 'text' && typeof item.text === 'string') {
+                            text += item.text;
+                        }
+                    }
+                }
+                return text || 'Session finalized and cleaned up';
+            }
+        } catch (e) {
+            return `Finalize session failed: ${e instanceof Error ? e.message : String(e)}`;
+        }
+        return 'MCP 未就绪，无法结束会话';
+    }
+ }
